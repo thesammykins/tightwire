@@ -131,6 +131,9 @@ Step '[5/5] Checking the exe'
 # capture its output.
 $out = Join-Path $env:TEMP "tightwire-build-version-$PID.txt"
 $p = Start-Process -FilePath (Join-Path $OutDir 'tightwire.exe') -ArgumentList '--version' -NoNewWindow -PassThru -RedirectStandardOutput $out
+# Windows PowerShell 5.1 only reports ExitCode for a -PassThru process if its
+# handle was read while it was alive; without this ExitCode is empty.
+$null = $p.Handle
 if (-not $p.WaitForExit(30000)) { $p.Kill(); Fail @('tightwire.exe --version did not finish within 30 s.') }
 $version = [string](Get-Content -Raw -LiteralPath $out -ErrorAction SilentlyContinue)
 Remove-Item -Force -LiteralPath $out -ErrorAction SilentlyContinue

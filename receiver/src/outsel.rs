@@ -403,9 +403,7 @@ mod tests {
     fn exclusive_defaults_and_overrides() {
         assert!(default_exclusive("Games (Elgato Virtual Audio)"));
         assert!(default_exclusive("CABLE Input (VB-Audio Virtual Cable)"));
-        assert!(!default_exclusive(
-            "Living Room TV (HD Audio Device)"
-        ));
+        assert!(!default_exclusive("Living Room TV (HD Audio Device)"));
         assert!(!default_exclusive("Speakers (Realtek(R) Audio)"));
         let mut s = TraySettings::default();
         s.choose(&sample_pc()[2]);
@@ -480,9 +478,8 @@ mod tests {
         assert!(warn.is_empty());
 
         // 0.1.0 wrote `device = <name>` (or `device = ` for automatic).
-        let (old, _) = TraySettings::parse(
-            "device = Microphone (6- USB Microphone) (Elgato Virtual Audio)\n",
-        );
+        let (old, _) =
+            TraySettings::parse("device = Microphone (6- USB Microphone) (Elgato Virtual Audio)\n");
         assert_eq!(
             old.output,
             Some(OutputChoice {

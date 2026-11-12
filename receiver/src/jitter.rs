@@ -235,7 +235,6 @@ impl JitterBuffer {
         self.max_target_s = max_target_s.max(min_target_s);
     }
 
-
     pub fn target_frames(&self) -> u64 {
         (self.target_s() * self.rate()).round() as u64
     }

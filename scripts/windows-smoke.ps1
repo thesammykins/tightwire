@@ -29,6 +29,8 @@ foreach ($c in $cases) {
     # way to wait for it and capture its standard streams.
     $p = Start-Process -FilePath $Exe -ArgumentList $c.Args -NoNewWindow -PassThru `
         -RedirectStandardOutput $out -RedirectStandardError $err
+    # Read the handle now so ExitCode is populated (PowerShell 5.1 quirk).
+    $null = $p.Handle
     if (-not $p.WaitForExit(120000)) {
         $p.Kill()
         $code = 'timeout'
