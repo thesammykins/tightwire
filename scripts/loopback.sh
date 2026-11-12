@@ -135,7 +135,7 @@ DEPTH=$(field depth_avg_ms "$OUT/latency.recv.txt"); FLOOR=$(field floor_ms "$OU
 # Send → output must be about the buffer depth (plus <= 2 ms: half a packet,
 # the 0.5 ms resampler filter and scheduling), never below it by more than the clock uncertainty.
 awk -v m="$MMED" -v d="$DEPTH" -v u="$MUNC" 'BEGIN { exit !(m >= d - 1 - u && m <= d + 2 + u) }' \
-  || fail "latency: marker median $MMED ms vs buffer $DEPTH ms (± $MUNC)"
+  || timing "latency: marker median $MMED ms vs buffer $DEPTH ms (± $MUNC)" || FAILED=1
 [[ "$FLOOR" == 3.000 && "$CAP" == 15.000 ]] || fail "latency: receiver floor/cap $FLOOR/$CAP ms (want 3/15)"
 grep -q "tuning result: applied" "$OUT/latency.send.txt" || fail "latency: tuning not acknowledged"
 echo "latency: $MARKERS markers, send→output median $MMED ms (± $MUNC), buffer $DEPTH ms, floor/cap $FLOOR/$CAP ms"
