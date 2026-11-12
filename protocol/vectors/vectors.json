@@ -1,0 +1,852 @@
+{
+ "version": 2,
+ "keys": {
+  "root": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+  "m2r": "01cfcc3c4b997cf90b0337e005162310",
+  "r2m": "de8c385b7622ddfc11a384060cc9bbf3"
+ },
+ "pairing": {
+  "shared_secret": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+  "transcript_hash": "223ab9b9f3731a30ec7e5873caad755bb13986fada699a5a420248754f10a7ee",
+  "root": "fe3b2b0c1232d66e784a423850a016e5620660ef8b5b3862dae7ea35d47a13e8",
+  "confirm_key": "77318ffe06ae5c0f98a4c9bfca03bc70223bb190751c48c9145bd930496dd5c2",
+  "sas": "523197",
+  "commit": "5457495202080000a0a1a2a3a4a5a6a7a8a9aaabacadaeaf630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd0a53747564696f204d6163",
+  "response": "5457495202090000c0c1c2c3c4c5c6c7c8c9cacbcccdcecf202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f0947414d494e472d5043",
+  "reveal": "54574952020a0000000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+ },
+ "vectors": [
+  {
+   "name": "audio_f32_mono",
+   "kind": "audio",
+   "hex": "545749520201341207000000500100000000000001010000000000000000003f000000bf0000803f000080bf0000803e000000be0000803af465bca903b7dada",
+   "fields": {
+    "stream_id": 4660,
+    "sequence": 7,
+    "timestamp": 336,
+    "sample_rate": 48000,
+    "channels": 1,
+    "format": "f32",
+    "flags": 0,
+    "samples": [
+     0.0,
+     0.5,
+     -0.5,
+     1.0,
+     -1.0,
+     0.25,
+     -0.125,
+     0.0009765625
+    ],
+    "samples_f32": [
+     0.0,
+     0.5,
+     -0.5,
+     1.0,
+     -1.0,
+     0.25,
+     -0.125,
+     0.0009765625
+    ]
+   },
+   "auth": {
+    "key": "m2r",
+    "nonce": 81985529216486895
+   }
+  },
+  {
+   "name": "audio_f32_stereo_discontinuity",
+   "kind": "audio",
+   "hex": "545749520201efbe00000000000000000000000001020001000000000000003f000000bf0000803f000080bf0000803e000000be0000803a3ca6964d33995447",
+   "fields": {
+    "stream_id": 48879,
+    "sequence": 0,
+    "timestamp": 0,
+    "sample_rate": 48000,
+    "channels": 2,
+    "format": "f32",
+    "flags": 1,
+    "samples": [
+     0.0,
+     0.5,
+     -0.5,
+     1.0,
+     -1.0,
+     0.25,
+     -0.125,
+     0.0009765625
+    ],
+    "samples_f32": [
+     0.0,
+     0.5,
+     -0.5,
+     1.0,
+     -1.0,
+     0.25,
+     -0.125,
+     0.0009765625
+    ]
+   },
+   "auth": {
+    "key": "m2r",
+    "nonce": 81985529216486895
+   }
+  },
+  {
+   "name": "audio_f32_seq_wrap_44k1",
+   "kind": "audio",
+   "hex": "545749520201ffffffffffff0000000001000000000100000000403f000040bf11cd3f943c45ce42",
+   "fields": {
+    "stream_id": 65535,
+    "sequence": 4294967295,
+    "timestamp": 4294967296,
+    "sample_rate": 44100,
+    "channels": 1,
+    "format": "f32",
+    "flags": 0,
+    "samples": [
+     0.75,
+     -0.75
+    ],
+    "samples_f32": [
+     0.75,
+     -0.75
+    ]
+   },
+   "auth": {
+    "key": "m2r",
+    "nonce": 81985529216486895
+   }
+  },
+  {
+   "name": "audio_s24_stereo_96k",
+   "kind": "audio",
+   "hex": "54574952020101002a000000007701000000000003020100000000ffff7f000080010000ffffff000040900362364745fe48",
+   "fields": {
+    "stream_id": 1,
+    "sequence": 42,
+    "timestamp": 96000,
+    "sample_rate": 96000,
+    "channels": 2,
+    "format": "s24",
+    "flags": 0,
+    "samples": [
+     0,
+     8388607,
+     -8388608,
+     1,
+     -1,
+     4194304
+    ],
+    "samples_f32": [
+     0.0,
+     0.9999998807907104,
+     -1.0,
+     1.1920928955078125e-07,
+     -1.1920928955078125e-07,
+     0.5
+    ]
+   },
+   "auth": {
+    "key": "m2r",
+    "nonce": 81985529216486895
+   }
+  },
+  {
+   "name": "audio_s16_mono_88k2",
+   "kind": "audio",
+   "hex": "545749520201ff00e803000015cd5b0700000000020102000000ff7f00800100ffff00400094aa043bcb0353",
+   "fields": {
+    "stream_id": 255,
+    "sequence": 1000,
+    "timestamp": 123456789,
+    "sample_rate": 88200,
+    "channels": 1,
+    "format": "s16",
+    "flags": 0,
+    "samples": [
+     0,
+     32767,
+     -32768,
+     1,
+     -1,
+     16384
+    ],
+    "samples_f32": [
+     0.0,
+     0.999969482421875,
+     -1.0,
+     3.0517578125e-05,
+     -3.0517578125e-05,
+     0.5
+    ]
+   },
+   "auth": {
+    "key": "m2r",
+    "nonce": 81985529216486895
+   }
+  },
+  {
+   "name": "audio_f32_8ch",
+   "kind": "audio",
+   "hex": "545749520201424203000000900000000000000001080000000000000000003f000000bf0000803f000080bf0000803e000000be0000803ae7dd7bf649442dae",
+   "fields": {
+    "stream_id": 16962,
+    "sequence": 3,
+    "timestamp": 144,
+    "sample_rate": 48000,
+    "channels": 8,
+    "format": "f32",
+    "flags": 0,
+    "samples": [
+     0.0,
+     0.5,
+     -0.5,
+     1.0,
+     -1.0,
+     0.25,
+     -0.125,
+     0.0009765625
+    ],
+    "samples_f32": [
+     0.0,
+     0.5,
+     -0.5,
+     1.0,
+     -1.0,
+     0.25,
+     -0.125,
+     0.0009765625
+    ]
+   },
+   "auth": {
+    "key": "m2r",
+    "nonce": 81985529216486895
+   }
+  },
+  {
+   "name": "stats_typical",
+   "kind": "stats",
+   "hex": "5457495202023412c4090000e80300000300000001000000d6ffffff0000000005000000e7030000efcdab896745230168b5a8132ffe4753",
+   "fields": {
+    "stream_id": 4660,
+    "depth_us": 2500,
+    "received": 1000,
+    "lost": 3,
+    "late": 1,
+    "drift_ppm": -42,
+    "underruns": 0,
+    "auth_dropped": 5,
+    "echo_seq": 999,
+    "session_nonce": 81985529216486895
+   },
+   "auth": {
+    "key": "r2m"
+   }
+  },
+  {
+   "name": "stats_extremes",
+   "kind": "stats",
+   "hex": "545749520202ffffffffffffffffffff00000000ffffffff00000080ffffffffffffffffffffffffffffffffffffffff26627adba36ed904",
+   "fields": {
+    "stream_id": 65535,
+    "depth_us": 4294967295,
+    "received": 4294967295,
+    "lost": 0,
+    "late": 4294967295,
+    "drift_ppm": -2147483648,
+    "underruns": 4294967295,
+    "auth_dropped": 4294967295,
+    "echo_seq": 4294967295,
+    "session_nonce": 18446744073709551615
+   },
+   "auth": {
+    "key": "r2m"
+   }
+  },
+  {
+   "name": "hello_unsolicited",
+   "kind": "hello",
+   "hex": "5457495202040000efcdab896745230100000000000000001222fceef286a84a",
+   "fields": {
+    "session_nonce": 81985529216486895,
+    "echo": 0
+   },
+   "auth": {
+    "key": "r2m"
+   }
+  },
+  {
+   "name": "hello_echo",
+   "kind": "hello",
+   "hex": "5457495202040000efcdab89674523011032547698badcfe51ba61642ce7220f",
+   "fields": {
+    "session_nonce": 81985529216486895,
+    "echo": 18364758544493064720
+   },
+   "auth": {
+    "key": "r2m"
+   }
+  },
+  {
+   "name": "probe",
+   "kind": "probe",
+   "hex": "54574952020500008877665544332211b1be0b1dec2390f5",
+   "fields": {
+    "nonce": 1234605616436508552
+   },
+   "auth": {
+    "key": "m2r"
+   }
+  },
+  {
+   "name": "beacon_ascii",
+   "kind": "beacon",
+   "hex": "5457495202030000cbc3c0c1c2c3c4c5c6c7c8c9cacbcccdcecf0947414d494e472d5043",
+   "fields": {
+    "port": 50123,
+    "receiver_id": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "host": "GAMING-PC"
+   }
+  },
+  {
+   "name": "beacon_utf8",
+   "kind": "beacon",
+   "hex": "5457495202030000ca12c0c1c2c3c4c5c6c7c8c9cacbcccdcecf0e5374c3ba64696f2d504320e29c93",
+   "fields": {
+    "port": 4810,
+    "receiver_id": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "host": "Stúdio-PC ✓"
+   }
+  },
+  {
+   "name": "beacon_empty_name",
+   "kind": "beacon",
+   "hex": "5457495202030000ca120000000000000000000000000000000000",
+   "fields": {
+    "port": 4810,
+    "receiver_id": "00000000000000000000000000000000",
+    "host": ""
+   }
+  },
+  {
+   "name": "pair_commit",
+   "kind": "commit",
+   "hex": "5457495202080000a0a1a2a3a4a5a6a7a8a9aaabacadaeaf630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd0a53747564696f204d6163",
+   "fields": {
+    "id": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+    "commitment": "630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd",
+    "name": "Studio Mac"
+   }
+  },
+  {
+   "name": "pair_response",
+   "kind": "response",
+   "hex": "5457495202090000c0c1c2c3c4c5c6c7c8c9cacbcccdcecf202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f0947414d494e472d5043",
+   "fields": {
+    "id": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "public_key": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+    "name": "GAMING-PC"
+   }
+  },
+  {
+   "name": "pair_reveal",
+   "kind": "reveal",
+   "hex": "54574952020a0000000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+   "fields": {
+    "public_key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+   }
+  },
+  {
+   "name": "pair_confirm_mac",
+   "kind": "confirm",
+   "hex": "54574952020b000000c1cd49947a8b95884028211911c9833b",
+   "fields": {
+    "role": 0,
+    "mac": "c1cd49947a8b95884028211911c9833b"
+   }
+  },
+  {
+   "name": "pair_confirm_receiver",
+   "kind": "confirm",
+   "hex": "54574952020b0000019d0a1a228f3c6bb9b46c131ea54fc11c",
+   "fields": {
+    "role": 1,
+    "mac": "9d0a1a228f3c6bb9b46c131ea54fc11c"
+   }
+  },
+  {
+   "name": "pair_abort",
+   "kind": "abort",
+   "hex": "54574952020c000001",
+   "fields": {
+    "reason": 1
+   }
+  },
+  {
+   "name": "handoff_offer_two",
+   "kind": "handoff_offer",
+   "hex": "5457495202100000d4c3b2a1a80c000203312d3103312d3414304021af38ed33",
+   "fields": {
+    "request_id": 2712847316,
+    "usbip_port": 3240,
+    "host": "",
+    "bus_ids": [
+     "1-1",
+     "1-4"
+    ]
+   },
+   "auth": {
+    "key": "m2r",
+    "nonce": 81985529216486895
+   }
+  },
+  {
+   "name": "handoff_offer_host",
+   "kind": "handoff_offer",
+   "hex": "545749520210000007000000a80c0c3139322e3136382e312e31300105312d322e33ffcff8c551321218",
+   "fields": {
+    "request_id": 7,
+    "usbip_port": 3240,
+    "host": "192.168.1.10",
+    "bus_ids": [
+     "1-2.3"
+    ]
+   },
+   "auth": {
+    "key": "m2r",
+    "nonce": 81985529216486895
+   }
+  },
+  {
+   "name": "handoff_ack_attach",
+   "kind": "handoff_ack",
+   "hex": "5457495202110000d4c3b2a1010203312d3100030003312d3401001575736269703a2063616e6e6f7420636f6e6e65637427f3f8884316b7fb",
+   "fields": {
+    "request_id": 2712847316,
+    "op": 1,
+    "items": [
+     {
+      "bus_id": "1-1",
+      "result": 0,
+      "port": 3,
+      "message": ""
+     },
+     {
+      "bus_id": "1-4",
+      "result": 1,
+      "port": 0,
+      "message": "usbip: cannot connect"
+     }
+    ]
+   },
+   "auth": {
+    "key": "r2m"
+   }
+  },
+  {
+   "name": "handoff_ack_detach_missing",
+   "kind": "handoff_ack",
+   "hex": "545749520211000009000000020103312d3202001375736269702e657865206e6f7420666f756e643203481e96ed3111",
+   "fields": {
+    "request_id": 9,
+    "op": 2,
+    "items": [
+     {
+      "bus_id": "1-2",
+      "result": 2,
+      "port": 0,
+      "message": "usbip.exe not found"
+     }
+    ]
+   },
+   "auth": {
+    "key": "r2m"
+   }
+  },
+  {
+   "name": "handoff_release",
+   "kind": "handoff_release",
+   "hex": "5457495202120000040302010203312d3103312d3478005e541c0de3f8",
+   "fields": {
+    "request_id": 16909060,
+    "bus_ids": [
+     "1-1",
+     "1-4"
+    ]
+   },
+   "auth": {
+    "key": "m2r",
+    "nonce": 81985529216486895
+   }
+  },
+  {
+   "name": "deck_request_toggle",
+   "kind": "deck_request",
+   "hex": "5457495202130000bebafeca7bc49a789a01000002c65e62f19c998f31",
+   "fields": {
+    "request_id": 3405691582,
+    "sent_at_ms": 1762960000123,
+    "target": 2
+   },
+   "auth": {
+    "key": "r2m"
+   }
+  },
+  {
+   "name": "deck_ack_pc",
+   "kind": "deck_ack",
+   "hex": "5457495202140000bebafeca01011d53656e64696e6720312064657669636520746f2047414d494e472d5043158186bc13943b58",
+   "fields": {
+    "request_id": 3405691582,
+    "accepted": true,
+    "owner": 1,
+    "message": "Sending 1 device to GAMING-PC"
+   },
+   "auth": {
+    "key": "m2r"
+   }
+  },
+  {
+   "name": "stats_extended",
+   "kind": "stats",
+   "hex": "54574952020234125a0a00000ed601000200000000000000e1ffffff01000000000000000ad60100efcdab896745230101020202280a0000780000008002000000000000204e0000e001000080bb000000770100ee85ffff0000000060000000010000000100000200000000303e490000000000141a99be1c00000040529cbe1c000000c0a83214dc14ce7187184181",
+   "fields": {
+    "stream_id": 4660,
+    "depth_us": 2650,
+    "received": 120334,
+    "lost": 2,
+    "late": 0,
+    "drift_ppm": -31,
+    "underruns": 1,
+    "auth_dropped": 0,
+    "echo_seq": 120330,
+    "session_nonce": 81985529216486895,
+    "ext": {
+     "output_mode": 2,
+     "stream_channels": 2,
+     "output_channels": 2,
+     "target_us": 2600,
+     "jitter_mean_us": 120,
+     "jitter_peak_us": 640,
+     "min_target_us": 0,
+     "max_target_us": 20000,
+     "output_period_frames": 480,
+     "output_rate": 48000,
+     "stream_rate": 96000,
+     "drift_ppb": -31250,
+     "duplicates": 0,
+     "concealed_frames": 96,
+     "resets": 1,
+     "ring_fill": 1,
+     "ring_capacity": 512,
+     "ring_full": 0,
+     "marker_timestamp": 4800048,
+     "marker_output_us": 123456789012,
+     "receiver_now_us": 123457000000,
+     "receiver_ipv4": "192.168.50.20"
+    }
+   },
+   "auth": {
+    "key": "r2m"
+   }
+  },
+  {
+   "name": "hello_extended",
+   "kind": "hello",
+   "hex": "5457495202040000efcdab89674523011032547698badcfe01c0a8321468f3c8f4e5000000c75ab0e38bad3d07",
+   "fields": {
+    "session_nonce": 81985529216486895,
+    "echo": 18364758544493064720,
+    "ext": {
+     "revision": 1,
+     "receiver_ipv4": "192.168.50.20",
+     "receiver_time_us": 987654321000
+    }
+   },
+   "auth": {
+    "key": "r2m"
+   }
+  },
+  {
+   "name": "tuning_set_floor",
+   "kind": "tuning_set",
+   "hex": "54574952021500000df0ad0b00a00f0000e02e0000614ed790bbfc94f6",
+   "fields": {
+    "request_id": 195948557,
+    "adaptive": false,
+    "min_target_us": 4000,
+    "max_target_us": 12000
+   },
+   "auth": {
+    "key": "m2r",
+    "nonce": 81985529216486895
+   }
+  },
+  {
+   "name": "tuning_set_adaptive",
+   "kind": "tuning_set",
+   "hex": "5457495202150000020000000100000000204e00007f642a121323bcb4",
+   "fields": {
+    "request_id": 2,
+    "adaptive": true,
+    "min_target_us": 0,
+    "max_target_us": 20000
+   },
+   "auth": {
+    "key": "m2r",
+    "nonce": 81985529216486895
+   }
+  },
+  {
+   "name": "tuning_ack_applied",
+   "kind": "tuning_ack",
+   "hex": "54574952021600000df0ad0b00a00f0000e02e0000000a4089d4820fac3c",
+   "fields": {
+    "request_id": 195948557,
+    "result": 0,
+    "min_target_us": 4000,
+    "max_target_us": 12000,
+    "message": ""
+   },
+   "auth": {
+    "key": "r2m"
+   }
+  },
+  {
+   "name": "tuning_ack_rejected",
+   "kind": "tuning_ack",
+   "hex": "5457495202160000030000000100000000204e00002063617020312e30206d73206973206f7574736964652032e28093313030206d7361e0eeae516f7456",
+   "fields": {
+    "request_id": 3,
+    "result": 1,
+    "min_target_us": 0,
+    "max_target_us": 20000,
+    "message": "cap 1.0 ms is outside 2–100 ms"
+   },
+   "auth": {
+    "key": "r2m"
+   }
+  },
+  {
+   "name": "bad_magic",
+   "kind": "invalid",
+   "hex": "545749580201341207000000500100000000000001010000000000000000003f000000bf0000803f000080bf0000803e000000be0000803af465bca903b7dada",
+   "reason": "magic"
+  },
+  {
+   "name": "v1_packet",
+   "kind": "invalid",
+   "hex": "545749520101341207000000500100000000000001010000000000000000003f000000bf0000803f000080bf0000803e000000be0000803af465bca903b7dada",
+   "reason": "version"
+  },
+  {
+   "name": "unknown_type",
+   "kind": "invalid",
+   "hex": "545749520206341207000000500100000000000001010000000000000000003f000000bf0000803f000080bf0000803e000000be0000803af465bca903b7dada",
+   "reason": "type"
+  },
+  {
+   "name": "reserved_control_type",
+   "kind": "invalid",
+   "hex": "54574952021f341207000000500100000000000001010000000000000000003f000000bf0000803f000080bf0000803e000000be0000803af465bca903b7dada",
+   "reason": "type"
+  },
+  {
+   "name": "truncated_header",
+   "kind": "invalid",
+   "hex": "54574952020134",
+   "reason": "length"
+  },
+  {
+   "name": "truncated_audio_header",
+   "kind": "invalid",
+   "hex": "5457495202013412070000005001000000000000010100",
+   "reason": "length"
+  },
+  {
+   "name": "audio_no_payload",
+   "kind": "invalid",
+   "hex": "545749520201341207000000500100000000000001010000decfdc9bb00da732",
+   "reason": "length"
+  },
+  {
+   "name": "audio_partial_frame",
+   "kind": "invalid",
+   "hex": "5457495202013412070000005001000000000000010100000000000000005f9a82494e735653",
+   "reason": "length"
+  },
+  {
+   "name": "audio_zero_channels",
+   "kind": "invalid",
+   "hex": "545749520201341207000000500100000000000001000000000000000000003f000000bf0000803f000080bf0000803e000000be0000803a4c0e88e13469cede",
+   "reason": "channels"
+  },
+  {
+   "name": "audio_nine_channels",
+   "kind": "invalid",
+   "hex": "545749520201010000000000000000000000000001090000000000000000000000000000000000000000000000000000000000000000000000000000d5d0cd3078c29095",
+   "reason": "channels"
+  },
+  {
+   "name": "audio_bad_rate",
+   "kind": "invalid",
+   "hex": "545749520201341207000000500100000000000007010000000000000000003f000000bf0000803f000080bf0000803e000000be0000803afa54b8818dca921f",
+   "reason": "sample_rate"
+  },
+  {
+   "name": "audio_bad_format",
+   "kind": "invalid",
+   "hex": "545749520201341207000000500100000000000001010300000000000000003f000000bf0000803f000080bf0000803e000000be0000803a41b009abb52b7372",
+   "reason": "format"
+  },
+  {
+   "name": "audio_payload_too_large",
+   "kind": "invalid",
+   "hex": "545749520201010000000000000000000000000001010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000670ba46b3749d34c",
+   "reason": "length"
+  },
+  {
+   "name": "stats_truncated",
+   "kind": "invalid",
+   "hex": "5457495202023412c4090000e80300000300000001000000d6ffffff0000000005000000e7030000",
+   "reason": "length"
+  },
+  {
+   "name": "beacon_name_overruns",
+   "kind": "invalid",
+   "hex": "5457495202030000cbc3c0c1c2c3c4c5c6c7c8c9cacbcccdcecf0947414d494e472d50",
+   "reason": "length"
+  },
+  {
+   "name": "beacon_bad_utf8",
+   "kind": "invalid",
+   "hex": "5457495202030000ca120000000000000000000000000000000002fffe",
+   "reason": "utf8"
+  },
+  {
+   "name": "commit_truncated",
+   "kind": "invalid",
+   "hex": "5457495202080000a0a1a2a3a4a5a6a7a8a9aaabacadaeaf630dcd2966c4336691125448bbb25b4f",
+   "reason": "length"
+  },
+  {
+   "name": "confirm_bad_role",
+   "kind": "invalid",
+   "hex": "54574952020b000002c1cd49947a8b95884028211911c9833b",
+   "reason": "field"
+  },
+  {
+   "name": "offer_bad_busid",
+   "kind": "invalid",
+   "hex": "545749520210000001000000a80c00010331203191102fa44064d018",
+   "reason": "field"
+  },
+  {
+   "name": "deck_request_bad_target",
+   "kind": "invalid",
+   "hex": "5457495202130000010000000200000000000000035ed1ee3e02b90211",
+   "reason": "field"
+  },
+  {
+   "name": "beacon_name_bidi_override",
+   "kind": "invalid",
+   "hex": "5457495202030000ca12000000000000000000000000000000000c5043e280ae676e702e657865",
+   "reason": "field"
+  },
+  {
+   "name": "beacon_name_newline",
+   "kind": "invalid",
+   "hex": "5457495202030000ca12000000000000000000000000000000001050430a636f64653a2031323320343536",
+   "reason": "field"
+  },
+  {
+   "name": "commit_name_too_long",
+   "kind": "invalid",
+   "hex": "5457495202080000a0a1a2a3a4a5a6a7a8a9aaabacadaeaf630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd294d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d",
+   "reason": "field"
+  },
+  {
+   "name": "response_name_zero_width",
+   "kind": "invalid",
+   "hex": "5457495202090000c0c1c2c3c4c5c6c7c8c9cacbcccdcecf202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f0b47414d494e47e2808b5043",
+   "reason": "field"
+  },
+  {
+   "name": "offer_busid_letters",
+   "kind": "invalid",
+   "hex": "545749520210000001000000a80c0e3139322e3136382e35302e3139340103312d61d1a738657b30f5bd",
+   "reason": "field"
+  },
+  {
+   "name": "tuning_set_bad_flag",
+   "kind": "invalid",
+   "hex": "5457495202150000010000000200000000204e000072cc3a3ed451e850",
+   "reason": "field"
+  },
+  {
+   "name": "tuning_set_truncated",
+   "kind": "invalid",
+   "hex": "5457495202150000010000000000000000326f4ac19867d43a",
+   "reason": "length"
+  },
+  {
+   "name": "ack_truncated_item",
+   "kind": "invalid",
+   "hex": "545749520211000001000000010203312d31000100b2e4862b27835cfe",
+   "reason": "length"
+  },
+  {
+   "name": "audio_tag_flipped",
+   "kind": "bad_tag",
+   "hex": "545749520201341207000000500100000000000001010000000000000000003f000000bf0000803f000080bf0000803e000000be0000803af465bca903b7dadb",
+   "auth": {
+    "key": "m2r",
+    "nonce": 81985529216486895
+   }
+  },
+  {
+   "name": "audio_payload_tampered",
+   "kind": "bad_tag",
+   "hex": "545749520201341207000000500100000000000001010000000000000000803f000000bf0000803f000080bf0000803e000000be0000803af465bca903b7dada",
+   "auth": {
+    "key": "m2r",
+    "nonce": 81985529216486895
+   }
+  },
+  {
+   "name": "audio_wrong_nonce",
+   "kind": "bad_tag",
+   "hex": "545749520201341207000000500100000000000001010000000000000000003f000000bf0000803f000080bf0000803e000000be0000803af465bca903b7dada",
+   "auth": {
+    "key": "m2r",
+    "nonce": 81985529216486896
+   }
+  },
+  {
+   "name": "audio_reflected_key",
+   "kind": "bad_tag",
+   "hex": "545749520201341207000000500100000000000001010000000000000000003f000000bf0000803f000080bf0000803e000000be0000803afbd4a9ed1c338e50",
+   "auth": {
+    "key": "m2r",
+    "nonce": 81985529216486895
+   }
+  },
+  {
+   "name": "hello_signed_with_m2r",
+   "kind": "bad_tag",
+   "hex": "5457495202040000efcdab896745230100000000000000005de11777ee574e95",
+   "auth": {
+    "key": "r2m"
+   }
+  },
+  {
+   "name": "probe_zero_tag",
+   "kind": "bad_tag",
+   "hex": "545749520205000088776655443322110000000000000000",
+   "auth": {
+    "key": "m2r"
+   }
+  }
+ ]
+}

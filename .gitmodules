@@ -1,0 +1,3 @@
+[submodule "vendor/longcable"]
+	path = vendor/longcable
+	url = https://github.com/Sapd/longcable.git

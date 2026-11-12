@@ -1,0 +1,99 @@
+[tools]
+rust = { version = "1.96.0", targets = "x86_64-pc-windows-msvc,x86_64-pc-windows-gnu" }
+# Cross-linking the Windows .exe from macOS (windows-gnu via zig's MinGW
+# toolchain), avoiding cargo-xwin's Microsoft SDK licence.
+zig = "0.15.2"
+"cargo:cargo-zigbuild" = "0.24.1"
+# Only used to regenerate protocol/vectors (task `vectors`).
+python = "3.13"
+# Hygiene: third-party notices, secret scan, workflow lint.
+"github:EmbarkStudios/cargo-about" = "0.9.3"
+gitleaks = "8.30.1"
+actionlint = "1.7.12"
+# Rasterises assets/icon/tightwire.svg (task `icon`).
+resvg = "0.49.0"
+zizmor = "1.32.0"
+
+# Swift comes from Xcode (xcrun); mise does not manage it.
+
+[tasks.vectors]
+description = "Regenerate the golden protocol vectors"
+run = "python protocol/gen_vectors.py"
+
+[tasks.build]
+description = "Build the receiver and the Swift sender (release)"
+run = [
+  "cargo build --release --manifest-path receiver/Cargo.toml",
+  "swift build -c release --package-path mac",
+]
+
+[tasks.test]
+description = "Rust and Swift unit tests (no audio hardware, no microphone)"
+run = [
+  "cargo test --release --manifest-path receiver/Cargo.toml",
+  "swift test --package-path mac",
+]
+
+[tasks.loopback]
+description = "Localhost pairing + streaming + liveness checks (no microphone)"
+run = "bash scripts/loopback.sh"
+
+[tasks.check-windows]
+description = "Type-check and lint the receiver for x86_64-pc-windows-msvc (no linker needed)"
+run = [
+  "cargo check --release --manifest-path receiver/Cargo.toml --target x86_64-pc-windows-msvc --all-targets",
+  "cargo clippy --release --manifest-path receiver/Cargo.toml --target x86_64-pc-windows-msvc --all-targets -- -D warnings",
+]
+
+[tasks.build-windows]
+description = "Cross-build tightwire-recv.exe (x86_64-pc-windows-gnu via zig)"
+run = "cargo zigbuild --release --manifest-path receiver/Cargo.toml --target x86_64-pc-windows-gnu"
+
+[tasks.bundle]
+description = "Build and ad-hoc sign dist/Tightwire.app (SIGN_IDENTITY=auto for Developer ID)"
+run = "bash mac/scripts/bundle.sh"
+
+[tasks.build-longcable]
+description = "Build the vendored Longcable (handoff helper) from its pinned source"
+run = [
+  "git submodule update --init vendor/longcable",
+  "swift build -c release --package-path vendor/longcable --product longcable-server",
+]
+
+[tasks.install-handoff]
+description = "Install Longcable's root service (prints the sudo command; never elevates itself)"
+run = "bash scripts/install-handoff.sh"
+
+[tasks.uninstall-handoff]
+description = "Remove Longcable's root service (prints the sudo command; never elevates itself)"
+run = "bash scripts/uninstall-handoff.sh"
+
+[tasks.package-windows]
+description = "Build dist/Tightwire-Windows.zip (cross-linked tightwire.exe + installer)"
+run = "bash scripts/package-windows.sh"
+
+[tasks.notices]
+description = "Regenerate THIRD-PARTY-NOTICES.txt (cargo-about + Longcable)"
+run = "bash scripts/notices.sh"
+
+[tasks.secrets]
+description = "Scan the working tree and the full git history for secrets (gitleaks)"
+run = [
+  "gitleaks git --no-banner --redact .",
+  "gitleaks dir --no-banner --redact --max-target-megabytes 5 .",
+]
+
+[tasks.lint-actions]
+description = "Lint GitHub Actions workflows (actionlint, zizmor)"
+run = [
+  "actionlint",
+  "zizmor --offline .github",
+]
+
+[tasks.icon]
+description = "Render assets/icon/*.svg to Tightwire.icns and tightwire.ico (committed)"
+run = "bash scripts/icon.sh"
+
+[tasks.package-mac]
+description = "Build dist/Tightwire.dmg (app + embedded Longcable; Developer ID if available, else ad-hoc)"
+run = "bash scripts/package-mac.sh"

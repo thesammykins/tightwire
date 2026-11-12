@@ -1,0 +1,158 @@
+{
+  "message" : "",
+  "ok" : true,
+  "status" : {
+    "allowedPeers" : [
+      "100.64.0.0\/10"
+    ],
+    "availableDevices" : [
+      {
+        "location" : "00122100",
+        "name" : "Example Webcam",
+        "product" : "4c03",
+        "serial" : "",
+        "vendor" : "2e1a"
+      },
+      {
+        "location" : "00122500",
+        "name" : "USB Billboard Device",
+        "product" : "8822",
+        "serial" : "",
+        "vendor" : "2109"
+      },
+      {
+        "location" : "00125000",
+        "name" : "USB Billboard Device",
+        "product" : "8822",
+        "serial" : "",
+        "vendor" : "2109"
+      },
+      {
+        "location" : "00141000",
+        "name" : "USB SPDIF OUT",
+        "product" : "2221",
+        "serial" : "",
+        "vendor" : "0d8c"
+      },
+      {
+        "location" : "00144000",
+        "name" : "ExampleDock",
+        "product" : "0019",
+        "serial" : "1234",
+        "vendor" : "341d"
+      },
+      {
+        "location" : "00243000",
+        "name" : "USB Storage",
+        "product" : "0764",
+        "serial" : "000000000001",
+        "vendor" : "05e3"
+      },
+      {
+        "location" : "01122500",
+        "name" : "USB Billboard Device",
+        "product" : "8822",
+        "serial" : "",
+        "vendor" : "2109"
+      },
+      {
+        "location" : "01125000",
+        "name" : "USB Billboard Device",
+        "product" : "8822",
+        "serial" : "",
+        "vendor" : "2109"
+      },
+      {
+        "location" : "01131100",
+        "name" : "Example Mechanical Keyboard",
+        "product" : "2b0c",
+        "serial" : "0000000000000000000000FAKE000001",
+        "vendor" : "1b1c"
+      },
+      {
+        "location" : "01131200",
+        "name" : "Example Keyboard Display",
+        "product" : "2b18",
+        "serial" : "0000FAKE000001",
+        "vendor" : "1b1c"
+      },
+      {
+        "location" : "01132240",
+        "name" : "OBSBOT Meet 2",
+        "product" : "fefb",
+        "serial" : "",
+        "vendor" : "3564"
+      },
+      {
+        "location" : "01132320",
+        "name" : "USB Receiver",
+        "product" : "c548",
+        "serial" : "",
+        "vendor" : "046d"
+      },
+      {
+        "location" : "01132340",
+        "name" : "Wireless Headset Dongle",
+        "product" : "0001",
+        "serial" : "00000000000000000002",
+        "vendor" : "36bc"
+      },
+      {
+        "location" : "01134200",
+        "name" : "USB Receiver",
+        "product" : "c547",
+        "serial" : "",
+        "vendor" : "046d"
+      },
+      {
+        "location" : "01140000",
+        "name" : "ExampleDock",
+        "product" : "0020",
+        "serial" : "1234",
+        "vendor" : "341d"
+      },
+      {
+        "location" : "03200000",
+        "name" : "RTL9210B-CG",
+        "product" : "9210",
+        "serial" : "012345670003",
+        "vendor" : "0bda"
+      }
+    ],
+    "devices" : [
+      {
+        "bytes" : 0,
+        "completed" : 0,
+        "enabled" : false,
+        "errors" : 0,
+        "id" : "1-1",
+        "location" : "01133100",
+        "model" : "0fd9:0084",
+        "name" : "Stream Deck Plus",
+        "pending" : 0,
+        "serial" : "USB0FD90084",
+        "state" : "Available on this Mac"
+      },
+      {
+        "bytes" : 0,
+        "completed" : 0,
+        "enabled" : false,
+        "errors" : 0,
+        "id" : "1-2",
+        "location" : "01133200",
+        "model" : "0fd9:00a6",
+        "name" : "Elgato XLR Dock",
+        "pending" : 0,
+        "serial" : "USB0FD900A6",
+        "state" : "Available on this Mac"
+      }
+    ],
+    "listen" : "0.0.0.0",
+    "peer" : "100.64.0.0\/10",
+    "refusedPeers" : [
+
+    ],
+    "started" : 800000000.0,
+    "version" : "Swift 1.0"
+  }
+}

@@ -1,0 +1,130 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # mise itself, pinned (tools come from mise.toml).
+  MISE_VERSION: "2026.9.11"
+
+jobs:
+  lint:
+    name: Lint (workflows, secrets)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      # Only the tools named in install_args; never fetch the rest of mise.toml.
+      MISE_AUTO_INSTALL: "false"
+      MISE_EXEC_AUTO_INSTALL: "false"
+      MISE_NOT_FOUND_AUTO_INSTALL: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # gitleaks scans the full history
+          persist-credentials: false
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: actionlint zizmor gitleaks
+      - name: actionlint
+        run: mise exec -- actionlint
+      - name: zizmor
+        run: mise exec -- zizmor --offline --format plain .github
+      - name: gitleaks (tree and history)
+        run: mise exec -- gitleaks git --no-banner --redact .
+
+  macos:
+    name: macOS (Swift + Rust tests, loopback, packaging)
+    # Xcode 27 lives on the `xcode-27` image (public preview, macOS 27,
+    # arm64): https://github.com/actions/runner-images#available-images
+    runs-on: xcode-27
+    timeout-minutes: 45
+    env:
+      # The toolchain the project is developed with (27.0, build 27A266a).
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+        with:
+          version: ${{ env.MISE_VERSION }}
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+          mise exec -- cargo --version
+      - name: rustfmt
+        run: mise exec -- cargo fmt --manifest-path receiver/Cargo.toml --check
+      - name: Unit tests (Rust + Swift)
+        run: mise run test
+      - name: Loopback (pairing, streaming, liveness, handoff with fakes)
+        run: mise run loopback
+      - name: Windows type-check and clippy (cross)
+        run: mise run check-windows
+      # What someone building from source gets: ad-hoc signature, upstream
+      # bundle identifier.
+      - name: Package the app and the Windows zip (ad-hoc signed)
+        env:
+          SIGN_IDENTITY: "-"
+          BUNDLE_ID: app.sammykins.tightwire
+        run: |
+          mise run package-mac
+          mise run package-windows
+          codesign --verify --deep --strict dist/Tightwire.app
+          dist/Tightwire.app/Contents/MacOS/Tightwire --snapshot out/ui
+          ls out/ui
+
+  windows:
+    name: Windows (MSVC build, tests, clippy, CLI smoke)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      # Only the tools named in install_args; never fetch the rest of mise.toml.
+      MISE_AUTO_INSTALL: "false"
+      MISE_EXEC_AUTO_INSTALL: "false"
+      MISE_NOT_FOUND_AUTO_INSTALL: "false"
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+        with:
+          version: ${{ env.MISE_VERSION }}
+          # Only Rust: zig/cargo-zigbuild are for cross-linking from macOS.
+          install_args: rust
+      - name: Toolchain
+        run: |
+          mise exec rust -- rustc -vV
+          mise exec rust -- cargo --version
+      # The build-it-yourself path a PC user runs (Windows PowerShell 5.1,
+      # like "Build Tightwire.cmd"): checks, cargo build --release, and the
+      # same folder layout as the zip.
+      - name: Build (MSVC) with windows/build.ps1
+        shell: powershell
+        run: mise exec rust -- powershell -NoProfile -ExecutionPolicy Bypass -File windows/build.ps1
+      - name: Check the assembled folder
+        run: |
+          $expected = 'Install Tightwire.cmd', 'LICENSE.txt', 'README.txt', 'THIRD-PARTY-NOTICES.txt', 'Uninstall Tightwire.cmd', 'install.ps1', 'tightwire.exe', 'uninstall.ps1'
+          $actual = Get-ChildItem -Name dist/Tightwire-Windows | Sort-Object
+          if (Compare-Object $expected $actual) { Write-Error "dist/Tightwire-Windows holds: $($actual -join ', ')"; exit 1 }
+      - name: Tests
+        run: mise exec rust -- cargo test --release --locked --manifest-path receiver/Cargo.toml
+      - name: Clippy
+        run: mise exec rust -- cargo clippy --release --locked --manifest-path receiver/Cargo.toml --all-targets -- -D warnings
+      - name: CLI smoke test (no audio hardware on the runner)
+        run: ./scripts/windows-smoke.ps1 -Exe dist/Tightwire-Windows/tightwire.exe

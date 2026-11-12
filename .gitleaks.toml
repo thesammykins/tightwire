@@ -1,0 +1,11 @@
+# gitleaks configuration (`mise run secrets`, CI).
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Published test vectors: fixed keys derived from fixed inputs, not secrets"
+paths = [
+  '''^protocol/vectors/vectors\.json$''',
+  '''^protocol/vectors/siphash\.json$''',
+  '''^protocol/gen_vectors\.py$''',
+]

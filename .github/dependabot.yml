@@ -1,0 +1,39 @@
+version: 2
+
+# Weekly, grouped, with a cooldown so brand-new releases age a little before
+# they are proposed. Rust lockfile changes also need `mise run notices` so the
+# committed THIRD-PARTY-NOTICES.txt (copied by windows/build.ps1) stays current.
+updates:
+  - package-ecosystem: cargo
+    directory: /receiver
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    groups:
+      rust-minor:
+        update-types: [minor, patch]
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "build(deps)"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci(deps)"
+
+  # vendor/longcable: a new upstream commit is a new GPL source to review and
+  # re-test on hardware before it ships inside the app.
+  - package-ecosystem: gitsubmodule
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build(deps)"

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Tightwire app icon, simplified for 16-32 px.
+       Original artwork for Tightwire, GPL-3.0-or-later like the rest of the
+       repository. `mise run icon` renders the .icns and .ico from it. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1c2836"/>
+      <stop offset="1" stop-color="#0a1017"/>
+    </linearGradient>
+    <linearGradient id="wire" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#3fd2b8"/>
+      <stop offset="0.5" stop-color="#72f2db"/>
+      <stop offset="1" stop-color="#3fd2b8"/>
+    </linearGradient>
+  </defs>
+  <rect x="40" y="40" width="944" height="944" rx="200" fill="url(#bg)"/>
+  <rect x="41.5" y="41.5" width="941" height="941" rx="198.5" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="3"/>
+  <path d="M178 512 H356 C399.1 512 390.9 286 434 286 C520.2 286 503.8 738 590 738 C633.1 738 624.9 512 668 512 H846" fill="none" stroke="url(#wire)" stroke-width="104" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="178" cy="512" r="98" fill="#e7eef5"/>
+  <circle cx="846" cy="512" r="98" fill="#e7eef5"/>
+</svg>

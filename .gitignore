@@ -1,0 +1,10 @@
+/receiver/target/
+/mac/.build/
+/mac/.swiftpm/
+/dist/
+/out/
+*.wav
+.DS_Store
+.claude/worktrees/
+# Builder-local overrides for mac/scripts/bundle.sh (not committed).
+/mac/local.env
