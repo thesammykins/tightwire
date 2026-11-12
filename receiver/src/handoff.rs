@@ -786,8 +786,10 @@ mod tests {
             .local_addr()
             .unwrap()
             .port();
+        // Windows retries the SYN to a closed loopback port for about 2 s
+        // before reporting the refusal, so give it longer than that.
         assert_eq!(
-            tcp_reach("127.0.0.1", port, Duration::from_secs(1)),
+            tcp_reach("127.0.0.1", port, Duration::from_secs(5)),
             Reach::Refused
         );
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

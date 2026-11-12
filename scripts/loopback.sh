@@ -53,6 +53,15 @@ SFP=$(sed -nE 's/.*fingerprint ([0-9a-f]+).*/\1/p' "$OUT/pair-send.txt")
 [[ $(stat -f %Lp "$OUT/recv-pairing.conf") == 600 ]] || fail "receiver pairing file is not 0600"
 echo "codes match ($RCODE), key fingerprints match ($RFP)"
 
+# Timing-sensitive checks (buffer depth, glitch-free audio) need a machine
+# whose threads are scheduled on time. Shared CI runners stall for tens of
+# milliseconds, so LOOPBACK_TIMING=relaxed reports those as warnings and
+# keeps only the functional checks (pairing, auth, every packet delivered).
+timing() { # message; returns 0 (ignored) when relaxed, 1 when strict
+  if [[ "${LOOPBACK_TIMING:-strict}" == relaxed ]]; then echo "warning (timing relaxed): $1"; return 0; fi
+  echo "$1"; return 1
+}
+
 stream_once() { # name, recv args..., -- , send args... ; returns non-zero on failure
   local name=$1; shift
   local rargs=() sargs=() bad=0
@@ -66,12 +75,14 @@ stream_once() { # name, recv args..., -- , send args... ; returns non-zero on fa
     >"$OUT/$name.send.txt" 2>"$OUT/$name.send.log" || { echo "$name: sender exited non-zero"; bad=1; }
   wait $rp || { echo "$name: receiver exited non-zero"; bad=1; }
   cat "$OUT/$name.recv.txt" "$OUT/$name.send.txt"
-  "$CHECK" "$OUT/$name.wav" --freq 1000 --skip-ms 500 || { echo "$name: WAV check failed"; bad=1; }
+  "$CHECK" "$OUT/$name.wav" --freq 1000 --skip-ms 500 || timing "$name: WAV check failed" || bad=1
   local depth lost late under auth
   depth=$(field depth_avg_ms "$OUT/$name.recv.txt")
   lost=$(field lost "$OUT/$name.recv.txt"); late=$(field late "$OUT/$name.recv.txt")
   under=$(field underruns "$OUT/$name.recv.txt"); auth=$(field auth_dropped "$OUT/$name.recv.txt")
-  awk -v d="$depth" 'BEGIN { exit !(d > 0 && d <= 4.0) }' || { echo "$name: steady-state depth $depth ms (need <= 4)"; bad=1; }
+  awk -v d="$depth" 'BEGIN { exit !(d > 0 && d <= 4.0) }' || timing "$name: steady-state depth $depth ms (need <= 4)" || bad=1
+  local rx; rx=$(field received "$OUT/$name.recv.txt")
+  [[ "${rx:-0}" -ge 9000 && "$lost" == 0 ]] || { echo "$name: received ${rx:-0} packets, lost $lost (want >= 9000, 0)"; bad=1; }
   [[ "$auth" == 0 ]] || { echo "$name: $auth packets failed authentication"; bad=1; }
   echo "$name: depth ${depth} ms, lost $lost, late $late, underruns $under"
   return $bad

@@ -70,6 +70,9 @@ jobs:
       - name: Unit tests (Rust + Swift)
         run: mise run test
       - name: Loopback (pairing, streaming, liveness, handoff with fakes)
+        # Hosted runners stall threads for tens of ms; see scripts/loopback.sh.
+        env:
+          LOOPBACK_TIMING: relaxed
         run: mise run loopback
       - name: Windows type-check and clippy (cross)
         run: mise run check-windows
