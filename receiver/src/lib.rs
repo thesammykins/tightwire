@@ -6,6 +6,7 @@ pub mod applog;
 pub mod auth;
 pub mod clock;
 pub mod deck;
+pub mod devclock;
 pub mod doctor;
 pub mod drift;
 pub mod engine;

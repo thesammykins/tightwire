@@ -40,6 +40,16 @@ pub struct Counters {
     pub resets: u64,
     /// Frames played as silence/fade because their packet never arrived.
     pub concealed_frames: u64,
+    /// Times the buffer was faded out and skipped forward because it
+    /// overflowed (a burst of arrivals), and the frames discarded.
+    pub trims: u64,
+    pub trimmed_frames: u64,
+    /// Discrete depth corrections requested by the engine: fade, skip
+    /// forward (too deep) or fade, insert silence (too shallow), fade in.
+    pub skips: u64,
+    pub skipped_frames: u64,
+    pub inserts: u64,
+    pub inserted_frames: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +85,14 @@ const PEAK_DECAY_S: f64 = 8.0;
 const SAFETY_MARGIN_S: f64 = 0.0005;
 /// Depth above 2 × target + this is trimmed (faded, skipped) back to target.
 const TRIM_SLACK_S: f64 = 0.002;
+
+/// A depth correction waiting for the fade-out to finish.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Step {
+    None,
+    Skip(u64),
+    Insert(u64),
+}
 
 impl JitterEstimator {
     fn new() -> Self {
@@ -133,12 +151,17 @@ pub struct JitterBuffer {
     tail_decay: f32,
     jitter: JitterEstimator,
     last_packet_frames: usize,
-    /// Output device period in output-rate frames, for the target floor.
-    output_period_s: f64,
+    /// How far the output device pulls frames ahead of its playout (s):
+    /// half a period for a steady device, half a burst for a bursty one
+    /// (`devclock.rs`). Twice this is in the target floor.
+    device_lead_s: f64,
     min_target_s: f64,
     max_target_s: f64,
     /// Read position at the most recent priming → playing transition.
     play_start_pos: u64,
+    step: Step,
+    /// Frames of silence still to insert before playing on.
+    inserting: u64,
     pub counters: Counters,
 }
 
@@ -162,8 +185,10 @@ impl JitterBuffer {
             tail_decay: 0.9,
             jitter: JitterEstimator::new(),
             last_packet_frames: 0,
-            output_period_s,
+            device_lead_s: output_period_s / 2.0,
             play_start_pos: 0,
+            step: Step::None,
+            inserting: 0,
             min_target_s,
             max_target_s,
             counters: Counters::default(),
@@ -197,15 +222,44 @@ impl JitterBuffer {
         self.format.map_or(48_000.0, |f| f.sample_rate as f64)
     }
 
-    /// Adaptive target depth in seconds: one packet plus one output period
-    /// plus a fixed safety margin, plus measured arrival jitter, clamped to
+    /// Adaptive target depth in seconds: one packet plus what the output
+    /// device pulls at once (one period, or a whole burst) plus a fixed
+    /// safety margin, plus measured arrival jitter, clamped to
     /// [--target-ms, --max-ms].
     pub fn target_s(&self) -> f64 {
-        let floor =
-            self.last_packet_frames as f64 / self.rate() + self.output_period_s + SAFETY_MARGIN_S;
-        (floor + self.jitter.needed())
+        (self.floor_s() + self.jitter.needed())
             .max(self.min_target_s)
             .min(self.max_target_s)
+    }
+
+    /// The adaptive floor before jitter and limits.
+    fn floor_s(&self) -> f64 {
+        self.last_packet_frames as f64 / self.rate() + 2.0 * self.device_lead_s + SAFETY_MARGIN_S
+    }
+
+    /// Sets how far the output device pulls ahead of its playout (s); see
+    /// `devclock::DeviceClock::lead_s`.
+    pub fn set_device_lead(&mut self, lead_s: f64) {
+        self.device_lead_s = lead_s;
+    }
+
+    /// Asks for a one-off depth correction: positive frames are skipped,
+    /// negative frames of silence inserted, each between a fade-out and a
+    /// fade-in. Ignored while another is pending or not playing.
+    pub fn request_step(&mut self, frames: i64) -> bool {
+        if self.state != State::Playing || self.step != Step::None || self.inserting > 0 {
+            return false;
+        }
+        self.step = match frames {
+            f if f > 0 => Step::Skip(f as u64),
+            f if f < 0 => Step::Insert(f.unsigned_abs()),
+            _ => return false,
+        };
+        true
+    }
+
+    pub fn step_pending(&self) -> bool {
+        self.step != Step::None || self.inserting > 0
     }
 
     /// Recent worst arrival delay beyond the fastest packet (s).
@@ -249,6 +303,8 @@ impl JitterBuffer {
         self.highest_seq = h.sequence.wrapping_sub(1);
         self.seq_window = 0;
         self.jitter = JitterEstimator::new();
+        self.step = Step::None;
+        self.inserting = 0;
         // Fade length ~0.67 ms regardless of rate.
         self.fade_frames = (format.sample_rate as u64 / 1500).max(8);
         self.gain_step = 1.0 / self.fade_frames as f32;
@@ -364,9 +420,16 @@ impl JitterBuffer {
                 self.gain = 0.0;
             }
         }
+        if self.state == State::Playing && self.inserting > 0 {
+            // Inserting silence: the device plays on, the stream waits.
+            self.inserting -= 1;
+            self.emit_tail_only(out, ch);
+            return;
+        }
         if self.state == State::Playing && self.read_pos >= self.write_end {
             self.counters.underruns += 1;
             self.state = State::Priming;
+            self.step = Step::None;
             if self.gain > 0.0 {
                 self.start_tail();
             }
@@ -378,17 +441,27 @@ impl JitterBuffer {
 
         // Trim back to the target when the buffer is far above it (a burst
         // after a stall), not only at the hard cap: the drift loop can only
-        // drain 1 ms per second, and this is a live-monitoring path.
+        // drain 1 ms per second, and this is a live-monitoring path. Never
+        // closer to the target than the depth's own sawtooth (one packet
+        // plus one device burst) and some slack: at the cap, target and
+        // cap coincide, and 0.2.0 then trimmed every sawtooth peak — a fade
+        // every few ms ("static") that also held the mean below target.
         let rate = fmt.sample_rate as f64;
-        let trim_s = (2.0 * self.target_s() + TRIM_SLACK_S).min(self.max_target_s);
+        let target = self.target_s();
+        let headroom =
+            self.last_packet_frames as f64 / rate + 2.0 * self.device_lead_s + TRIM_SLACK_S;
+        let trim_s = (2.0 * target + TRIM_SLACK_S)
+            .min(self.max_target_s)
+            .max(target + headroom);
         let overfull = self.depth_frames() as f64 > trim_s * rate;
+        let stepping = self.step != Step::None;
         let here = self.present_at(self.read_pos);
         // Look one fade length ahead: a known hole there (data beyond it has
         // arrived) means fade out now so the gain reaches zero at the hole.
         // Frames past write_end are simply not here yet, not holes.
         let ahead = self.read_pos + self.fade_frames;
         let ahead_ok = ahead >= self.write_end || self.present[(ahead & MASK) as usize];
-        let want = if here && ahead_ok && !overfull {
+        let want = if here && ahead_ok && !overfull && !stepping {
             1.0
         } else {
             0.0
@@ -420,7 +493,31 @@ impl JitterBuffer {
 
         if overfull && self.gain == 0.0 {
             // Faded out: skip ahead to the target depth, then fade back in.
+            let before = self.read_pos;
             self.skip_to(self.write_end.saturating_sub(self.target_frames()));
+            self.counters.trims += 1;
+            self.counters.trimmed_frames += self.read_pos - before;
+            self.step = Step::None;
+        } else if stepping && self.gain == 0.0 {
+            match self.step {
+                Step::Skip(n) => {
+                    // Keep at least half the target so a skip can never
+                    // cause the underrun it is meant to prevent.
+                    let keep = self.target_frames() / 2;
+                    let to = (self.read_pos + n).min(self.write_end.saturating_sub(keep));
+                    let before = self.read_pos;
+                    self.skip_to(to);
+                    self.counters.skips += 1;
+                    self.counters.skipped_frames += self.read_pos - before;
+                }
+                Step::Insert(n) => {
+                    self.inserting = n;
+                    self.counters.inserts += 1;
+                    self.counters.inserted_frames += n;
+                }
+                Step::None => {}
+            }
+            self.step = Step::None;
         }
     }
 

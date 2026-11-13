@@ -5,10 +5,23 @@
 //! jitter buffer, updates the drift controller and resamples into the device
 //! buffer. It never allocates, locks or logs; observability goes out through
 //! relaxed atomics in `SharedStats`.
+//!
+//! Depth is measured against what the device really played (0.2.1). 0.2.0
+//! modelled playout as "where the last callback started, then nominal
+//! speed", which is right for a device that calls back once per period on a
+//! steady clock and wrong for most virtual endpoints: a device that hands
+//! out several buffers from a coarse timer, stalls, or runs thousands of ppm
+//! off nominal had its floor sized for one period (so every burst emptied
+//! the buffer), a correction range too small to follow it, and a few ms of
+//! bias in the measured depth. `devclock.rs` now fits the device's playout
+//! line from its callbacks, the floor covers its bursts, large errors are
+//! removed with one faded step instead of seconds of saturated pitch
+//! correction, and the stats report what the device does.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering::Relaxed};
 
+use crate::devclock::DeviceClock;
 use crate::drift::DriftController;
 use crate::jitter::{InsertOutcome, JitterBuffer, MAX_CHANNELS};
 use crate::protocol::{AudioHeader, FLAG_MARKER, MAX_SAMPLES, SAMPLE_RATES};
@@ -42,6 +55,21 @@ impl Slot {
         }
     }
 }
+
+/// Time constant of the fast depth estimate that sizes discrete steps.
+const FAST_TAU_S: f64 = 0.05;
+/// A depth error this large (or this fraction of the target, whichever is
+/// more; deficits get the larger pair) lasting `STEP_HOLD_S` is removed in
+/// one step. Below it the drift loop's ±1000 ppm closes the gap within a
+/// few seconds.
+const STEP_MIN_S: f64 = 0.003;
+const STEP_EXCESS: f64 = 0.25;
+const STEP_DEFICIT_MIN_S: f64 = 0.002;
+const STEP_DEFICIT: f64 = 0.25;
+const STEP_HOLD_S: f64 = 0.25;
+/// At most one step per this long, so a misbehaving device cannot turn
+/// steps into a stream of dropouts.
+const STEP_HOLDOFF_S: f64 = 1.0;
 
 /// Ring depth in packets: ~0.5 s of 1 ms packets, so a stalled output thread
 /// (e.g. device switching) does not immediately drop audio on the floor.
@@ -94,6 +122,28 @@ pub struct SharedStats {
     pub tuning_min_us: AtomicU32,
     pub tuning_max_us: AtomicU32,
     pub tuning_generation: AtomicU32,
+    /// Overflow trims and the engine's discrete steps (skip / insert).
+    pub trims: AtomicU64,
+    pub skips: AtomicU64,
+    pub inserts: AtomicU64,
+    /// 1 while the drift loop is at a limit (`DriftController::saturated`).
+    pub saturated: AtomicU32,
+    /// Instantaneous jitter-buffer depth after the last callback (µs).
+    pub real_depth_us: AtomicU32,
+    /// The device's measured rate vs nominal (ppb; 0 until known) and how
+    /// far it pulls ahead of its playout (µs, see devclock.rs).
+    pub device_rate_ppb: AtomicI32,
+    pub device_lead_us: AtomicU32,
+    /// Callback cadence, accumulated by the audio thread and taken (swapped
+    /// to zero) by whoever logs it: count, output frames, sum and max of the
+    /// intervals between callbacks (µs).
+    pub cadence_callbacks: AtomicU64,
+    pub cadence_frames: AtomicU64,
+    pub cadence_interval_sum_us: AtomicU64,
+    pub cadence_interval_max_us: AtomicU32,
+    /// Output frames the device holds queued beyond the one being played,
+    /// as measured by the backend (WASAPI padding); µs at the output rate.
+    pub device_queue_us: AtomicU32,
 }
 
 impl SharedStats {
@@ -128,13 +178,24 @@ pub struct Engine {
     tables: Vec<(u32, KernelTable)>,
     table_idx: usize,
     stats: Arc<SharedStats>,
-    /// Playout model at the previous render: (time, read position, stream
-    /// frames consumed per second). See `drain`.
-    last_render: Option<(f64, u64, f64)>,
+    /// What the device does: playout line, burst lead, rate.
+    device: DeviceClock,
+    /// Output frames rendered so far.
+    out_frames: u64,
+    /// After the previous render, if it ended playing: (its time, read
+    /// position including the resampler's fraction, output frames rendered,
+    /// ratio). See `drain`.
+    anchor: Option<(f64, f64, u64, f64)>,
     margin_sum: f64,
     margin_n: u32,
     last_drift_update: f64,
     depth_est_s: Option<f64>,
+    /// Faster-moving copy of the depth (τ = 50 ms) to size discrete steps.
+    depth_fast_s: Option<f64>,
+    /// Since when the depth has been far from the target (step pending).
+    off_since: Option<f64>,
+    last_step_at: f64,
+    underruns_seen: u64,
     /// Read position at which the pending marker's first frame comes out of
     /// the resampler (marker timestamp + its TAPS/2 group delay).
     marker_due: Option<(u64, u64)>,
@@ -157,11 +218,17 @@ impl Engine {
             tables,
             table_idx: 1,
             stats,
-            last_render: None,
+            device: DeviceClock::new(cfg.out_rate as f64, cfg.period_frames),
+            out_frames: 0,
+            anchor: None,
             margin_sum: 0.0,
             margin_n: 0,
             last_drift_update: 0.0,
             depth_est_s: None,
+            depth_fast_s: None,
+            off_since: None,
+            last_step_at: f64::MIN,
+            underruns_seen: 0,
             marker_due: None,
             tuning_seen: 0,
         }
@@ -183,12 +250,19 @@ impl Engine {
         &self.drift
     }
 
+    pub fn device(&self) -> &DeviceClock {
+        &self.device
+    }
+
     /// Moves queued packets into the jitter buffer and measures each one's
     /// arrival margin: how far its last frame was ahead of the playout point
-    /// at the moment it arrived, with playout modelled as continuous from the
-    /// previous render. Sampling depth only at render instants instead would
-    /// alias packet-arrival sawtooth against the device period into a slow
-    /// beat (at the clock-offset frequency) that the drift loop would chase.
+    /// at the moment it arrived. The playout point is the read position
+    /// after the previous render, moved along the device's fitted playout
+    /// line (`devclock.rs`) to the arrival time — behind that read position
+    /// by whatever the device pulled ahead. Sampling depth only at render
+    /// instants instead would alias packet-arrival sawtooth against the
+    /// device period into a slow beat (at the clock-offset frequency) that
+    /// the drift loop would chase.
     fn drain(&mut self) {
         while let Ok(slot) = self.rx.pop() {
             let samples = &slot.samples[..slot.len];
@@ -209,16 +283,23 @@ impl Engine {
                         .unwrap_or(1);
                     self.rs.reset(slot.header.channels as usize);
                     self.drift.reset_depth();
-                    self.last_render = None;
+                    self.anchor = None;
                     self.margin_sum = 0.0;
                     self.margin_n = 0;
                     self.depth_est_s = None;
+                    self.depth_fast_s = None;
+                    self.off_since = None;
                     self.marker_due = None;
                 }
                 InsertOutcome::Stored if self.jb.is_playing() => {
-                    if let Some((t, pos, speed)) = self.last_render {
+                    if let Some((t, pos, out, ratio)) = self.anchor {
                         let frames = (slot.len / slot.header.channels as usize) as f64;
-                        let playout = pos as f64 + (slot.arrival_s - t).max(0.0) * speed;
+                        // A packet stamped before the previous render but
+                        // queued after it could not have been played then;
+                        // count it from that render, as 0.2.0 did.
+                        let at = slot.arrival_s.max(t);
+                        let played = self.device.line_at(at) - out as f64;
+                        let playout = pos + played * ratio;
                         let end = slot.header.timestamp as f64 + frames;
                         // Mean depth over the packet interval is margin - frames/2.
                         self.margin_sum += (end - playout - frames / 2.0) / self.jb.rate();
@@ -234,8 +315,11 @@ impl Engine {
     /// the callback time on the same monotonic clock as `Slot::arrival_s`.
     pub fn render(&mut self, out: &mut [f32], now_s: f64) {
         self.apply_tuning();
-        self.drain();
         let och = self.cfg.out_channels;
+        let frames_out = out.len() / och;
+        self.device.observe(now_s, frames_out, self.out_frames);
+        self.jb.set_device_lead(self.device.lead_s());
+        self.drain();
         let nominal = self.jb.rate() / self.cfg.out_rate as f64;
         if self.margin_n > 0 {
             let depth = self.margin_sum / self.margin_n as f64;
@@ -247,11 +331,18 @@ impl Engine {
                 0.0
             };
             self.last_drift_update = now_s;
+            self.depth_fast_s = Some(match self.depth_fast_s {
+                Some(f) => f + (depth - f) * (dt.max(0.0) / FAST_TAU_S).min(1.0),
+                None => depth,
+            });
             self.drift.update(depth, self.jb.target_s(), dt.max(0.0));
             self.depth_est_s = self.drift.smoothed_depth_s();
+            self.consider_step(now_s);
         }
         if !self.jb.is_playing() {
             self.depth_est_s = None;
+            self.depth_fast_s = None;
+            self.off_since = None;
         }
         let correction = self.drift.correction();
         let ratio = nominal * (1.0 + correction);
@@ -261,7 +352,6 @@ impl Engine {
             // target filters there so a target jump is not integrated as error.
             self.drift.reset_depth();
         }
-        let pos_before = self.jb.read_pos();
 
         let table = &self.tables[self.table_idx].1;
         let sch = self.rs.channels();
@@ -292,17 +382,58 @@ impl Engine {
                 }
             }
         }
-        // The playout model only holds across renders that played continuously.
-        // Playout model for the next interval. On the render that started
-        // playback, the model starts where priming left the read position
-        // (the transition happens at the first frames of this render).
-        let speed = ratio * self.cfg.out_rate as f64;
-        self.last_render = match (playing_before, self.jb.is_playing()) {
-            (true, true) => Some((now_s, pos_before, speed)),
-            (false, true) => Some((now_s, self.jb.play_start_pos(), speed)),
-            _ => None,
-        };
+        self.out_frames += frames_out as u64;
+        let underruns = self.jb.counters.underruns;
+        if underruns != self.underruns_seen {
+            // An underrun is a deficit step the device forced: the depth
+            // fell by about the target since the last step. Two in a row
+            // teach the loop the rate that keeps causing them.
+            self.underruns_seen = underruns;
+            self.drift.stepped(-self.jb.target_s(), now_s);
+        }
+        // The anchor for the next interval's arrivals: where the stream read
+        // position and the device's output count stand now. Only valid while
+        // playing; a render that ended priming anchors where playback began.
+        self.anchor = self.jb.is_playing().then_some((
+            now_s,
+            self.jb.read_pos() as f64 + self.rs.frac(),
+            self.out_frames,
+            ratio,
+        ));
         self.publish(correction);
+    }
+
+    /// Removes a large, lasting depth error in one faded step instead of
+    /// seconds of saturated pitch correction: a step of 20 ms would take the
+    /// ±1000 ppm loop 20 s. The cost is one fade-out/fade-in (~1.3 ms dip)
+    /// plus the skipped or inserted audio, once per disturbance.
+    fn consider_step(&mut self, now_s: f64) {
+        let (Some(fast), Some(target)) = (self.depth_fast_s, self.drift.target_s()) else {
+            return;
+        };
+        let err = fast - target;
+        // Too deep costs latency; too shallow risks an underrun.
+        let limit = if err > 0.0 {
+            STEP_MIN_S.max(STEP_EXCESS * target)
+        } else {
+            STEP_DEFICIT_MIN_S.max(STEP_DEFICIT * target)
+        };
+        if err.abs() < limit || self.jb.step_pending() {
+            self.off_since = None;
+            return;
+        }
+        let since = *self.off_since.get_or_insert(now_s);
+        if now_s - since < STEP_HOLD_S || now_s - self.last_step_at < STEP_HOLDOFF_S {
+            return;
+        }
+        let frames = (err * self.jb.rate()).round() as i64;
+        if self.jb.request_step(frames) {
+            self.last_step_at = now_s;
+            self.off_since = None;
+            self.drift.stepped(err, now_s);
+            self.depth_est_s = self.drift.smoothed_depth_s();
+            self.depth_fast_s = Some(fast - err);
+        }
     }
 
     fn apply_tuning(&mut self) {
@@ -323,16 +454,38 @@ impl Engine {
         self.depth_est_s
     }
 
-    fn publish(&self, correction: f64) {
+    fn publish(&mut self, correction: f64) {
+        let cad = self.device.take_cadence();
         let s = &self.stats;
+        s.cadence_callbacks.fetch_add(cad.callbacks, Relaxed);
+        s.cadence_frames.fetch_add(cad.frames, Relaxed);
+        s.cadence_interval_sum_us
+            .fetch_add((cad.interval_sum_s * 1e6) as u64, Relaxed);
+        s.cadence_interval_max_us
+            .fetch_max((cad.interval_max_s * 1e6) as u32, Relaxed);
+        s.device_rate_ppb.store(
+            self.device
+                .rate_ppm()
+                .map_or(0, |p| (p * 1e3).round() as i32),
+            Relaxed,
+        );
+        s.device_lead_us
+            .store((self.device.lead_s() * 1e6) as u32, Relaxed);
+        s.saturated.store(self.drift.saturated() as u32, Relaxed);
         let c = &self.jb.counters;
         let rate = self.jb.rate();
         let depth = self
             .depth_est_s
             .unwrap_or(self.jb.depth_frames() as f64 / rate);
         s.depth_us.store((depth * 1e6) as u32, Relaxed);
-        s.target_us
-            .store((self.jb.target_s() * 1e6) as u32, Relaxed);
+        // The target being steered to (upward jumps glide, falls are
+        // rate-limited; see drift.rs), which is what the depth should match.
+        let target = self
+            .drift
+            .target_s()
+            .filter(|_| self.jb.is_playing())
+            .unwrap_or_else(|| self.jb.target_s());
+        s.target_us.store((target * 1e6) as u32, Relaxed);
         s.jitter_us
             .store((self.jb.jitter_s() * 1e6) as u32, Relaxed);
         s.jitter_mean_us
@@ -351,6 +504,11 @@ impl Engine {
         s.underruns.store(c.underruns, Relaxed);
         s.resets.store(c.resets, Relaxed);
         s.concealed_frames.store(c.concealed_frames, Relaxed);
+        s.trims.store(c.trims, Relaxed);
+        s.skips.store(c.skips, Relaxed);
+        s.inserts.store(c.inserts, Relaxed);
+        s.real_depth_us
+            .store((self.jb.depth_frames() as f64 / rate * 1e6) as u32, Relaxed);
         s.drift_ppm
             .store((correction * 1e6).round() as i32, Relaxed);
         if let Some(f) = self.jb.format() {

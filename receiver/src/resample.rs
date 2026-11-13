@@ -110,6 +110,13 @@ impl Resampler {
         self.channels
     }
 
+    /// Fractional input position past the last frame pulled, in [0, 1):
+    /// with the count of frames pulled it gives the read position without
+    /// the ±1-frame quantisation of whole pulls.
+    pub fn frac(&self) -> f64 {
+        self.frac
+    }
+
     fn push(&mut self, frame: &[f32; MAX_CHANNELS]) {
         for (c, &v) in frame.iter().enumerate().take(self.channels) {
             let base = c * 2 * TAPS;
