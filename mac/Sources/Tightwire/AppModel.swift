@@ -233,7 +233,7 @@ final class AppModel {
         case .unpaired: "Not paired"
         case .idle: "Paired with \(peerName)"
         case .searching: "Looking for \(peerName)…"
-        case .streaming: "Streaming to \(peerName)"
+        case .streaming: pcNotPlaying ? "Streaming to \(peerName) — PC is not playing" : "Streaming to \(peerName)"
         case .error(let m): "Stopped: \(m)"
         }
     }
@@ -243,9 +243,37 @@ final class AppModel {
         switch phase {
         case .unpaired, .idle: return .idle
         case .searching: return .searching
-        case .streaming: return .streaming
+        case .streaming: return pcNotPlaying ? .warning : .streaming
         case .error: return .error
         }
+    }
+
+    /// Output health from the PC's latest fresh stats (0.2.1 PCs; nil for
+    /// older ones, which cannot say).
+    var receiverHealth: Wire.StatsHealth? { statsFresh ? stats?.ext?.health : nil }
+
+    static let pcNotPlayingText = "PC is not playing: choose an output on the PC"
+
+    /// The PC receives the stream but has no output device open: it says so
+    /// explicitly (stats health flag), rather than this being guessed from
+    /// zero counters.
+    var pcNotPlaying: Bool { phase == .streaming && receiverHealth.map { !$0.outputOpen } == true }
+
+    /// Something on the PC's output side needs attention, in words; nil when
+    /// healthy or not known.
+    var receiverHealthNote: String? {
+        guard phase == .streaming, let h = receiverHealth, h.outputOpen else { return nil }
+        var notes: [String] = []
+        if h.exclusiveFellBack {
+            notes.append("The PC switched its output to shared mode: exclusive mode was not keeping time.")
+        }
+        if h.isSaturated {
+            notes.append("The PC's drift correction is at its limit: its output device is not keeping time.")
+        }
+        if h.underrunsRising {
+            notes.append("Dropouts are climbing on the PC (\(stats?.underruns ?? 0) underruns so far).")
+        }
+        return notes.isEmpty ? nil : notes.joined(separator: " ")
     }
 
     /// The saved input is not connected: the system default is used meanwhile.
@@ -375,6 +403,8 @@ final class AppModel {
     /// Packet size to switch to once the receiver acknowledged its limits.
     @ObservationIgnored private var pendingPacketSize: Int?
     @ObservationIgnored private var lastSummary = Date.distantPast
+    @ObservationIgnored private var lastOutputWarning: String?
+    @ObservationIgnored private var lastHealthNote: String?
 
     private func interrupted(_ msg: String) {
         stop(reason: "device interrupted: \(msg)")
@@ -415,6 +445,7 @@ final class AppModel {
             log("stats", Self.summaryLine(st))
         }
         statsFresh = st.stats != nil && (st.statsAge ?? 99) < 3
+        logHealthChanges()
         // Peak-hold meter with ~300 ms release.
         level = max(st.peak, level * 0.7)
         let next: Phase = st.phase == .streaming ? .streaming : .searching
@@ -433,6 +464,24 @@ final class AppModel {
         }
     }
 
+    /// Logs the PC's output warnings once per change, not every tick.
+    private func logHealthChanges() {
+        let warning = pcNotPlaying ? Self.pcNotPlayingText : nil
+        if warning != lastOutputWarning {
+            if let warning {
+                log("stream", "\(warning) (the PC reports no open output device; audio is discarded there)")
+            } else if lastOutputWarning != nil {
+                log("stream", "the PC is playing again")
+            }
+            lastOutputWarning = warning
+        }
+        let note = receiverHealthNote
+        if note != lastHealthNote {
+            log("stream", note.map { "PC health: \($0)" } ?? "PC health: back to normal")
+            lastHealthNote = note
+        }
+    }
+
     /// One line every 10 s while streaming, for reading drift over hours.
     static func summaryLine(_ st: SessionStatus) -> String {
         var parts: [String] = []
@@ -444,6 +493,16 @@ final class AppModel {
             }
             parts.append("lost \(s.lost) late \(s.late) underruns \(s.underruns)")
             parts.append(String(format: "drift %+.1f ppm", s.ext.map { Double($0.driftPPB) / 1000 } ?? Double(s.driftPPM)))
+            if let h = s.ext?.health {
+                var f: [String] = [h.outputOpen ? "output open" : "NO OUTPUT"]
+                if h.isSaturated { f.append("saturated") }
+                if h.underrunsRising { f.append("underruns rising") }
+                if h.exclusiveFellBack { f.append("fell back to shared") }
+                parts.append("pc " + f.joined(separator: ", "))
+                parts.append(String(format: "queue %.2f ms device %+.0f ppm steps %u/%u trims %u",
+                                    Double(h.deviceQueueMicros) / 1000, Double(h.deviceRatePPB) / 1000,
+                                    h.skips, h.inserts, h.trims))
+            }
         } else {
             parts.append("no receiver stats")
         }
@@ -985,8 +1044,13 @@ extension AppModel {
         let streamRate = Double(x?.streamRate ?? st.stream.rate)
         t.append(.init(label: "Resampler", detail: "drift-correction filter delay (24 frames)",
                        millis: streamRate > 0 ? 24 / streamRate * 1000 : nil, kind: .fixed))
-        t.append(.init(label: "Output period", detail: x.map { "\($0.outputMode.name), \($0.outputPeriodFrames) frames at \($0.outputRate) Hz; the device may queue more" } ?? "needs Tightwire 0.2.0 on the PC",
-                       millis: x.map(\.outputPeriodMillis), kind: .estimate))
+        if let x, let h = x.health {
+            t.append(.init(label: "PC output queue", detail: "audio waiting in the PC's output endpoint (\(x.outputMode.name), \(x.outputPeriodFrames)-frame period)",
+                           millis: Double(h.deviceQueueMicros) / 1000, kind: .reported))
+        } else {
+            t.append(.init(label: "Output period", detail: x.map { "\($0.outputMode.name), \($0.outputPeriodFrames) frames at \($0.outputRate) Hz; the device may queue more" } ?? "needs Tightwire 0.2.0 on the PC",
+                           millis: x.map(\.outputPeriodMillis), kind: .estimate))
+        }
         return t
     }
 

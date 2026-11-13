@@ -233,6 +233,55 @@ enum Snapshot {
             m.sessionStatus = st
             m.testProgress = 0.4
         },
+        Scenario(name: "4d-pc-not-playing") { m in
+            paired(m)
+            m.pane = .stream
+            m.phase = .streaming
+            m.level = 0.3
+            m.statsFresh = true
+            var stats = Wire.Stats(streamID: 7, depthMicros: 0, received: 0, lost: 0, late: 0, driftPPM: 0,
+                                   underruns: 0, authDropped: 0, echoSequence: 4_990, sessionNonce: 9)
+            var x = Wire.StatsExt()
+            x.outputMode = .none
+            x.outputChannels = 2
+            x.maxTargetMicros = 20_000
+            x.outputPeriodFrames = 480
+            x.outputRate = 48_000
+            x.ringFill = 512
+            x.ringCapacity = 512
+            x.health = Wire.StatsHealth()
+            stats.ext = x
+            m.stats = stats
+            var st = Self.session
+            st.receiverRevision = 2
+            st.stats = stats
+            m.sessionStatus = st
+        },
+        Scenario(name: "4e-pc-health") { m in
+            paired(m)
+            m.pane = .stream
+            m.phase = .streaming
+            m.level = 0.3
+            m.statsFresh = true
+            var stats = Self.stats
+            stats.underruns = 37
+            stats.ext?.outputMode = .wasapiExclusive
+            stats.ext?.outputPeriodFrames = 144
+            var h = Wire.StatsHealth()
+            h.flags = Wire.StatsHealth.outputOpen | Wire.StatsHealth.saturated | Wire.StatsHealth.underruns
+            h.deviceQueueMicros = 3_000
+            h.deviceRatePPB = -2_150_000
+            h.deviceLeadMicros = 5_250
+            h.skips = 12
+            h.inserts = 4
+            h.trims = 3
+            stats.ext?.health = h
+            m.stats = stats
+            var st = Self.session
+            st.receiverRevision = 2
+            st.stats = stats
+            m.sessionStatus = st
+        },
         Scenario(name: "5-error") { m in
             paired(m)
             m.pane = .stream

@@ -110,7 +110,7 @@ private struct Sidebar: View {
         .listStyle(.sidebar)
         .safeAreaInset(edge: .bottom) {
             HStack(spacing: 8) {
-                StatusDot(phase: model.phase)
+                StatusDot(phase: model.phase, warning: model.pcNotPlaying)
                 Text(model.statusLine)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -148,6 +148,8 @@ private struct Sidebar: View {
 
 struct StatusDot: View {
     let phase: AppModel.Phase
+    /// Streaming to a PC that is not playing.
+    var warning = false
     var body: some View {
         Circle().fill(color).frame(width: 8, height: 8)
             .accessibilityHidden(true)
@@ -155,7 +157,7 @@ struct StatusDot: View {
 
     var color: Color {
         switch phase {
-        case .streaming: .green
+        case .streaming: warning ? .orange : .green
         case .searching: .yellow
         case .error: .red
         default: .secondary
@@ -172,7 +174,7 @@ private struct StreamPane: View {
         Form {
             Section {
                 HStack(alignment: .center, spacing: 12) {
-                    StatusDot(phase: model.phase)
+                    StatusDot(phase: model.phase, warning: model.pcNotPlaying)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(headline).font(.headline).lineLimit(1)
                         Text(subline).font(.caption).foregroundStyle(.secondary).lineLimit(2)
@@ -254,6 +256,22 @@ private struct StreamPane: View {
                     .font(.callout).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if model.pcNotPlaying {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(AppModel.pcNotPlayingText).font(.callout.weight(.semibold))
+                        Text("Audio reaches \(model.peerName), but no output device is open there, so it is discarded. On the PC: Tightwire tray icon › Output device.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                } icon: {
+                    Image(systemName: "speaker.slash.fill").foregroundStyle(.yellow)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+            } else if let note = model.receiverHealthNote {
+                Label(note, systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if let s = model.stats, model.statsFresh {
                 Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 8) {
                     GridRow {
@@ -274,6 +292,11 @@ private struct StreamPane: View {
                     Text("\(x.outputMode.name) · \(x.outputPeriodFrames)-frame period · stream \(Self.rate(Double(x.streamRate))) \(x.streamChannels) ch → device \(Self.rate(Double(x.outputRate))) \(x.outputChannels) ch · ring \(x.ringFill)/\(x.ringCapacity)\(x.minTargetMicros > 0 ? String(format: " · floor %.1f ms", Double(x.minTargetMicros) / 1000) : "") · cap \(String(format: "%.0f", Double(x.maxTargetMicros) / 1000)) ms")
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                    if let h = x.health, h.outputOpen {
+                        Text(String(format: "PC output: %.1f ms queued · device %+.0f ppm · %u skips, %u inserts, %u trims",
+                                    Double(h.deviceQueueMicros) / 1000, Double(h.deviceRatePPB) / 1000, h.skips, h.inserts, h.trims))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
             } else {
                 Text(model.phase == .streaming ? "Waiting for the PC's first report…"
@@ -304,7 +327,7 @@ private struct StreamPane: View {
         case .unpaired: "Not paired"
         case .idle: "Ready"
         case .searching: "Looking for \(model.peerName)…"
-        case .streaming: "Streaming to \(model.peerName)"
+        case .streaming: model.pcNotPlaying ? "Streaming — PC is not playing" : "Streaming to \(model.peerName)"
         case .error: "Stopped"
         }
     }
@@ -314,7 +337,7 @@ private struct StreamPane: View {
         case .unpaired: "Pair with a PC in Receiver first."
         case .idle: "Sends \(model.selectedDevice?.name ?? "the input") to \(model.peerName)."
         case .searching: "Audio is held back until the PC answers."
-        case .streaming: model.selectedDevice?.name ?? ""
+        case .streaming: model.pcNotPlaying ? "Choose an output on the PC: tray icon › Output device." : model.selectedDevice?.name ?? ""
         case .error: "Fix the problem below, then start again."
         }
     }
@@ -364,7 +387,7 @@ private struct LatencySection: View {
                         Text(model.latencyTotal.map { String(format: "%.1f ms", $0) } ?? "—")
                             .monospacedDigit().fontWeight(.semibold)
                         Text("sum").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-                        Text("mic to the PC's output device, including one output period").font(.caption).foregroundStyle(.secondary)
+                        Text(model.stats?.ext?.health != nil ? "mic to the PC's output device, including what its output endpoint has queued" : "mic to the PC's output device, including one output period").font(.caption).foregroundStyle(.secondary)
                     }
                     if let m = model.testResult?.marker, let u = model.testResult?.markerUncertaintyMillis {
                         GridRow {

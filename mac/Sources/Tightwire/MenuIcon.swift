@@ -1,8 +1,9 @@
 import AppKit
 
 /// The menu bar icon: a waveform, with a red "recording" dot while
-/// streaming, a hollow ring while looking for the PC, and an orange
-/// exclamation badge on error.
+/// streaming, a hollow ring while looking for the PC, a yellow exclamation
+/// badge while streaming to a PC that is not playing (warning), and an
+/// orange exclamation badge on error.
 ///
 /// Idle and searching are template images (the system tints them for light
 /// and dark menu bars). The streaming and error variants carry colour, so
@@ -12,7 +13,7 @@ import AppKit
 /// while the dot stays red.
 enum MenuIcon {
     enum State: Equatable, CaseIterable {
-        case idle, searching, streaming, error, code
+        case idle, searching, streaming, warning, error, code
     }
 
     static let size = NSSize(width: 20, height: 16)
@@ -34,6 +35,15 @@ enum MenuIcon {
             return badged(template: false) { rect in
                 NSColor.systemRed.setFill()
                 NSBezierPath(ovalIn: rect).fill()
+            }
+        case .warning:
+            return badged(template: false) { rect in
+                NSColor.systemYellow.setFill()
+                NSBezierPath(ovalIn: rect).fill()
+                let bar = NSRect(x: rect.midX - 0.75, y: rect.minY + 3.2, width: 1.5, height: rect.height - 5)
+                NSColor.black.setFill()
+                NSBezierPath(roundedRect: bar, xRadius: 0.7, yRadius: 0.7).fill()
+                NSBezierPath(ovalIn: NSRect(x: rect.midX - 0.8, y: rect.minY + 1.2, width: 1.6, height: 1.6)).fill()
             }
         case .error:
             return badged(template: false) { rect in
