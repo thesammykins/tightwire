@@ -151,6 +151,11 @@ STATS_EXT_FIELDS = [
     ("receiver_ipv4", "4s"),
 ]
 STATS_EXT_REVISION = 1
+# Revision 2 (0.2.1) appends the health block after the 88 bytes.
+STATS_HEALTH_FIELDS = [
+    ("flags", "B"), ("device_queue_us", "I"), ("device_rate_ppb", "i"), ("device_lead_us", "I"),
+    ("trims", "I"), ("skips", "I"), ("inserts", "I"),
+]
 
 
 def stats_vector(name, stream_id, depth_us, received, lost, late, drift_ppm, underruns, auth_dropped, echo_seq, nonce,
@@ -164,8 +169,14 @@ def stats_vector(name, stream_id, depth_us, received, lost, late, drift_ppm, und
     }
     if ext is not None:
         vals = [bytes(map(int, ext[k].split("."))) if k == "receiver_ipv4" else ext[k] for k, _ in STATS_EXT_FIELDS]
-        body += bytes([STATS_EXT_REVISION]) + struct.pack("<" + "".join(t for _, t in STATS_EXT_FIELDS), *vals)
+        health = ext.get("health")
+        body += bytes([2 if health else STATS_EXT_REVISION])
+        body += struct.pack("<" + "".join(t for _, t in STATS_EXT_FIELDS), *vals)
         assert len(body) == 8 + 40 + 88
+        if health:
+            body += struct.pack("<" + "".join(t for _, t in STATS_HEALTH_FIELDS),
+                                *[health[k] for k, _ in STATS_HEALTH_FIELDS])
+            assert len(body) == 8 + 40 + 88 + 25
         fields["ext"] = ext
     return vec(name, "stats", body + tag(K_R2M, body), fields, {"key": "r2m"})
 
@@ -318,6 +329,26 @@ vectors = [
     tuning_set_vector("tuning_set_adaptive", 2, 1, 0, 20000),
     tuning_ack_vector("tuning_ack_applied", 0x0BADF00D, 0, 4000, 12000, ""),
     tuning_ack_vector("tuning_ack_rejected", 3, 1, 0, 20000, "cap 1.0 ms is outside 2–100 ms"),
+    # Appended in 0.2.1: revision 2, with the output health block. The
+    # first is a PC with no output open (the Mac's "PC is not playing").
+    stats_vector("stats_health_no_output", 0x2345, 0, 5000, 0, 0, 0, 0, 0, 4990, NONCE, ext={
+        "output_mode": 0, "stream_channels": 0, "output_channels": 2, "target_us": 0,
+        "jitter_mean_us": 0, "jitter_peak_us": 0, "min_target_us": 0, "max_target_us": 20000,
+        "output_period_frames": 480, "output_rate": 48000, "stream_rate": 0, "drift_ppb": 0,
+        "duplicates": 0, "concealed_frames": 0, "resets": 0, "ring_fill": 512, "ring_capacity": 512,
+        "ring_full": 4478, "marker_timestamp": 0, "marker_output_us": 0,
+        "receiver_now_us": 50_000_000, "receiver_ipv4": "192.0.2.20",
+        "health": {"flags": 0, "device_queue_us": 0, "device_rate_ppb": 0, "device_lead_us": 0,
+                   "trims": 0, "skips": 0, "inserts": 0}}),
+    stats_vector("stats_health_saturated", 0x2345, 9100, 90000, 0, 0, 1000, 37, 0, 89990, NONCE, ext={
+        "output_mode": 1, "stream_channels": 2, "output_channels": 2, "target_us": 9050,
+        "jitter_mean_us": 10, "jitter_peak_us": 2950, "min_target_us": 0, "max_target_us": 20000,
+        "output_period_frames": 144, "output_rate": 48000, "stream_rate": 48000, "drift_ppb": 1_000_000,
+        "duplicates": 0, "concealed_frames": 0, "resets": 1, "ring_fill": 0, "ring_capacity": 512,
+        "ring_full": 0, "marker_timestamp": 0, "marker_output_us": 0,
+        "receiver_now_us": 240_000_000, "receiver_ipv4": "192.0.2.20",
+        "health": {"flags": 0b1111, "device_queue_us": 3000, "device_rate_ppb": -2_150_000,
+                   "device_lead_us": 5_250, "trims": 3, "skips": 12, "inserts": 4}}),
 ]
 
 good = bytes.fromhex(vectors[0]["hex"])

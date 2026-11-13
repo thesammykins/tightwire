@@ -235,6 +235,22 @@ fn golden_vectors_round_trip() {
                             std::net::Ipv4Addr::from(e.receiver_ipv4).to_string(),
                             x["receiver_ipv4"].as_str().unwrap()
                         );
+                        match (&e.health, x.get("health")) {
+                            (None, None) => {}
+                            (Some(h), Some(y)) => {
+                                assert_eq!(h.flags as u64, u(&y["flags"]));
+                                assert_eq!(h.device_queue_us as u64, u(&y["device_queue_us"]));
+                                assert_eq!(
+                                    h.device_rate_ppb as i64,
+                                    y["device_rate_ppb"].as_i64().unwrap()
+                                );
+                                assert_eq!(h.device_lead_us as u64, u(&y["device_lead_us"]));
+                                assert_eq!(h.trims as u64, u(&y["trims"]));
+                                assert_eq!(h.skips as u64, u(&y["skips"]));
+                                assert_eq!(h.inserts as u64, u(&y["inserts"]));
+                            }
+                            (a, b) => panic!("{name}: health mismatch {a:?} vs {b:?}"),
+                        }
                     }
                     (a, b) => panic!("{name}: extension mismatch {a:?} vs {b:?}"),
                 }

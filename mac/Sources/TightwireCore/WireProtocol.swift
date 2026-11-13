@@ -28,9 +28,11 @@ public enum Wire {
     /// Latency marker: the receiver reports when this packet's first frame
     /// reached its output device (stats extension). 0.1 receivers ignore it.
     public static let flagMarker: UInt8 = 0x02
-    /// Revision within version 2 (hello/stats extensions): 0 = 0.1.x, 1 = 0.2.0.
-    public static let protocolRevision: UInt8 = 1
+    /// Revision within version 2 (hello/stats extensions): 0 = 0.1.x,
+    /// 1 = 0.2.0, 2 = 0.2.1 (stats health block).
+    public static let protocolRevision: UInt8 = 2
     public static let statsExtLength = 88
+    public static let statsHealthLength = 25
     public static let helloExtLength = 13
     public static let tuningBodyLength = 21
     /// Peer names (beacon host, pairing names) are shown next to the pairing
@@ -174,11 +176,42 @@ public enum Wire {
         public var markerOutputMicros: UInt64 = 0
         public var receiverNowMicros: UInt64 = 0
         public var receiverIPv4: [UInt8] = [0, 0, 0, 0]
+        /// Revision 2 (0.2.1) receivers.
+        public var health: StatsHealth?
         public init() {}
 
         public var outputPeriodMillis: Double {
             outputRate == 0 ? 0 : Double(outputPeriodFrames) * 1000 / Double(outputRate)
         }
+    }
+
+    /// Output health (stats extension revision 2, 0.2.1 receivers).
+    public struct StatsHealth: Equatable, Sendable {
+        public static let outputOpen: UInt8 = 1 << 0
+        public static let saturated: UInt8 = 1 << 1
+        public static let underruns: UInt8 = 1 << 2
+        public static let exclusiveFallback: UInt8 = 1 << 3
+
+        public var flags: UInt8 = 0
+        /// Audio queued in the PC's output endpoint beyond its jitter buffer (µs).
+        public var deviceQueueMicros: UInt32 = 0
+        /// The PC output device's measured rate vs nominal (ppb; 0 = unknown).
+        public var deviceRatePPB: Int32 = 0
+        /// How far the device pulls ahead of its playout (µs).
+        public var deviceLeadMicros: UInt32 = 0
+        public var trims: UInt32 = 0
+        public var skips: UInt32 = 0
+        public var inserts: UInt32 = 0
+        public init() {}
+
+        /// An output device is open on the PC and rendering.
+        public var outputOpen: Bool { flags & Self.outputOpen != 0 }
+        /// The PC's drift loop has been at its limit for seconds.
+        public var isSaturated: Bool { flags & Self.saturated != 0 }
+        /// More than one underrun on the PC in the last 10 s.
+        public var underrunsRising: Bool { flags & Self.underruns != 0 }
+        /// The PC gave up on exclusive mode and fell back to shared.
+        public var exclusiveFellBack: Bool { flags & Self.exclusiveFallback != 0 }
     }
 
     /// Hello extension (0.2.0 receivers).
@@ -434,6 +467,18 @@ public enum Wire {
                 x.markerOutputMicros = b.u64(e + 68)
                 x.receiverNowMicros = b.u64(e + 76)
                 x.receiverIPv4 = Array(b[(e + 84)..<(e + 88)])
+                let h = e + statsExtLength
+                if b[e] >= 2, b.count >= h + statsHealthLength {
+                    var y = StatsHealth()
+                    y.flags = b[h]
+                    y.deviceQueueMicros = b.u32(h + 1)
+                    y.deviceRatePPB = Int32(bitPattern: b.u32(h + 5))
+                    y.deviceLeadMicros = b.u32(h + 9)
+                    y.trims = b.u32(h + 13)
+                    y.skips = b.u32(h + 17)
+                    y.inserts = b.u32(h + 21)
+                    x.health = y
+                }
                 ext = x
             }
             return .stats(Stats(streamID: streamID, depthMicros: b.u32(8), received: b.u32(12),
@@ -539,7 +584,7 @@ public enum Wire {
              s.authDropped, s.echoSequence].forEach { out.put($0) }
             out.put(s.sessionNonce)
             if let x = s.ext {
-                out.append(1)
+                out.append(x.health == nil ? 1 : 2)
                 out.append(x.outputMode.rawValue)
                 out.append(x.streamChannels)
                 out.append(x.outputChannels)
@@ -553,6 +598,11 @@ public enum Wire {
                 out.put(x.markerOutputMicros)
                 out.put(x.receiverNowMicros)
                 out.append(contentsOf: x.receiverIPv4.prefix(4))
+                if let y = x.health {
+                    out.append(y.flags)
+                    [y.deviceQueueMicros, UInt32(bitPattern: y.deviceRatePPB), y.deviceLeadMicros, y.trims,
+                     y.skips, y.inserts].forEach { out.put($0) }
+                }
             }
         case .hello(let nonce, let echo, let ext):
             out.putHeader(.hello, 0)

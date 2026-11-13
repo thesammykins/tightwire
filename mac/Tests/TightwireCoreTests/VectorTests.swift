@@ -132,6 +132,18 @@ struct VectorTests {
                 #expect(e.markerOutputMicros == uint(x["marker_output_us"]))
                 #expect(e.receiverNowMicros == uint(x["receiver_now_us"]))
                 #expect(e.receiverIPv4.map(String.init).joined(separator: ".") == x["receiver_ipv4"] as! String)
+                if let y = x["health"] as? [String: Any] {
+                    let h = try #require(e.health)
+                    #expect(UInt64(h.flags) == uint(y["flags"]))
+                    #expect(UInt64(h.deviceQueueMicros) == uint(y["device_queue_us"]))
+                    #expect(Int64(h.deviceRatePPB) == int(y["device_rate_ppb"]))
+                    #expect(UInt64(h.deviceLeadMicros) == uint(y["device_lead_us"]))
+                    #expect(UInt64(h.trims) == uint(y["trims"]))
+                    #expect(UInt64(h.skips) == uint(y["skips"]))
+                    #expect(UInt64(h.inserts) == uint(y["inserts"]))
+                } else {
+                    #expect(e.health == nil)
+                }
             } else {
                 #expect(s.ext == nil)
             }

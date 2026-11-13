@@ -20,15 +20,18 @@ pub const STATS_BODY_LEN: usize = HEADER_LEN + 40;
 /// Stats extension appended by 0.2.0 receivers (SPEC §3, "stats extension").
 /// Older Macs ignore trailing bytes; older receivers simply do not send it.
 pub const STATS_EXT_LEN: usize = 88;
-pub const STATS_EXT_REVISION: u8 = 1;
+/// Revision 2 (0.2.1) appends `StatsHealth` after those 88 bytes.
+pub const STATS_HEALTH_LEN: usize = 25;
+pub const STATS_EXT_REVISION: u8 = 2;
 pub const HELLO_BODY_LEN: usize = HEADER_LEN + 16;
 /// Hello extension (0.2.0 receivers): revision, receiver IPv4, receiver clock.
 pub const HELLO_EXT_LEN: usize = 13;
 /// Protocol revision within version 2, carried in the hello and stats
-/// extensions. 0 = 0.1.x (no extension), 1 = 0.2.0. The version byte stays 2
-/// because every 0.2.0 change is append-only or a new type: a 0.1.1 peer
-/// still streams, and each side tells the user to update the other (SPEC §3).
-pub const PROTOCOL_REVISION: u8 = 1;
+/// extensions. 0 = 0.1.x (no extension), 1 = 0.2.0, 2 = 0.2.1 (stats
+/// health block). The version byte stays 2 because every change is
+/// append-only or a new type: an older peer still streams, and each side
+/// tells the user to update the other (SPEC §3).
+pub const PROTOCOL_REVISION: u8 = 2;
 pub const TUNING_BODY_LEN: usize = HEADER_LEN + 13;
 /// Upper bound for a remotely set buffer cap: well inside the jitter ring
 /// (32768 frames = 341 ms at 96 kHz) and far above anything useful live.
@@ -272,7 +275,38 @@ pub struct StatsExt {
     /// The receiver's own IPv4 toward the Mac (inside the tag), so the Mac
     /// can check the datagram source before it believes an address change.
     pub receiver_ipv4: [u8; 4],
+    /// Revision 2 (0.2.1) receivers.
+    pub health: Option<StatsHealth>,
 }
+
+/// Output health (stats extension revision 2, 0.2.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct StatsHealth {
+    /// `HEALTH_*` bits.
+    pub flags: u8,
+    /// Audio queued in the output endpoint beyond the jitter buffer (µs):
+    /// latency the buffer depth does not include.
+    pub device_queue_us: u32,
+    /// The output device's measured rate vs nominal (ppb; 0 = not known).
+    pub device_rate_ppb: i32,
+    /// How far the device pulls ahead of its playout (µs): half a period
+    /// for a steady device, half a burst for a bursty one.
+    pub device_lead_us: u32,
+    /// Overflow trims, and the discrete skip / insert corrections so far.
+    pub trims: u32,
+    pub skips: u32,
+    pub inserts: u32,
+}
+
+/// An output device is open and has rendered in the last second. Without
+/// it the PC is not playing the stream anywhere.
+pub const HEALTH_OUTPUT_OPEN: u8 = 1 << 0;
+/// The drift loop has been at a limit for seconds.
+pub const HEALTH_SATURATED: u8 = 1 << 1;
+/// Underruns are climbing (more than one in the last 10 s).
+pub const HEALTH_UNDERRUNS: u8 = 1 << 2;
+/// Exclusive mode misbehaved and the receiver fell back to shared mode.
+pub const HEALTH_EXCLUSIVE_FALLBACK: u8 = 1 << 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Hello {
@@ -679,33 +713,44 @@ pub fn decode(b: &[u8]) -> Result<Packet<'_>, DecodeError> {
             // A shorter or unknown-revision extension is ignored, not an
             // error: the base fields stay usable.
             let e = STATS_BODY_LEN;
-            let ext =
-                (body.len() >= e + STATS_EXT_LEN && body[e] >= STATS_EXT_REVISION).then(|| {
-                    StatsExt {
-                        output_mode: OutputMode::from_code(body[e + 1]),
-                        stream_channels: body[e + 2],
-                        output_channels: body[e + 3],
-                        target_us: u32_at(body, e + 4),
-                        jitter_mean_us: u32_at(body, e + 8),
-                        jitter_peak_us: u32_at(body, e + 12),
-                        min_target_us: u32_at(body, e + 16),
-                        max_target_us: u32_at(body, e + 20),
-                        output_period_frames: u32_at(body, e + 24),
-                        output_rate: u32_at(body, e + 28),
-                        stream_rate: u32_at(body, e + 32),
-                        drift_ppb: u32_at(body, e + 36) as i32,
-                        duplicates: u32_at(body, e + 40),
-                        concealed_frames: u32_at(body, e + 44),
-                        resets: u32_at(body, e + 48),
-                        ring_fill: u16_at(body, e + 52),
-                        ring_capacity: u16_at(body, e + 54),
-                        ring_full: u32_at(body, e + 56),
-                        marker_timestamp: u64_at(body, e + 60),
-                        marker_output_us: u64_at(body, e + 68),
-                        receiver_now_us: u64_at(body, e + 76),
-                        receiver_ipv4: arr(body, e + 84),
-                    }
-                });
+            let ext = (body.len() >= e + STATS_EXT_LEN && body[e] >= 1).then(|| StatsExt {
+                output_mode: OutputMode::from_code(body[e + 1]),
+                stream_channels: body[e + 2],
+                output_channels: body[e + 3],
+                target_us: u32_at(body, e + 4),
+                jitter_mean_us: u32_at(body, e + 8),
+                jitter_peak_us: u32_at(body, e + 12),
+                min_target_us: u32_at(body, e + 16),
+                max_target_us: u32_at(body, e + 20),
+                output_period_frames: u32_at(body, e + 24),
+                output_rate: u32_at(body, e + 28),
+                stream_rate: u32_at(body, e + 32),
+                drift_ppb: u32_at(body, e + 36) as i32,
+                duplicates: u32_at(body, e + 40),
+                concealed_frames: u32_at(body, e + 44),
+                resets: u32_at(body, e + 48),
+                ring_fill: u16_at(body, e + 52),
+                ring_capacity: u16_at(body, e + 54),
+                ring_full: u32_at(body, e + 56),
+                marker_timestamp: u64_at(body, e + 60),
+                marker_output_us: u64_at(body, e + 68),
+                receiver_now_us: u64_at(body, e + 76),
+                receiver_ipv4: arr(body, e + 84),
+                health: (body[e] >= 2 && body.len() >= e + STATS_EXT_LEN + STATS_HEALTH_LEN).then(
+                    || {
+                        let h = e + STATS_EXT_LEN;
+                        StatsHealth {
+                            flags: body[h],
+                            device_queue_us: u32_at(body, h + 1),
+                            device_rate_ppb: u32_at(body, h + 5) as i32,
+                            device_lead_us: u32_at(body, h + 9),
+                            trims: u32_at(body, h + 13),
+                            skips: u32_at(body, h + 17),
+                            inserts: u32_at(body, h + 21),
+                        }
+                    },
+                ),
+            });
             Ok(Packet::Stats(Stats {
                 ext,
                 stream_id: u16_at(body, 6),
@@ -966,7 +1011,12 @@ pub fn encode_stats(s: &Stats) -> Vec<u8> {
     }
     out.extend_from_slice(&s.session_nonce.to_le_bytes());
     if let Some(e) = &s.ext {
-        out.push(STATS_EXT_REVISION);
+        // Without a health block this is a revision-1 extension.
+        out.push(if e.health.is_some() {
+            STATS_EXT_REVISION
+        } else {
+            1
+        });
         out.push(e.output_mode as u8);
         out.push(e.stream_channels);
         out.push(e.output_channels);
@@ -993,6 +1043,19 @@ pub fn encode_stats(s: &Stats) -> Vec<u8> {
         out.extend_from_slice(&e.marker_output_us.to_le_bytes());
         out.extend_from_slice(&e.receiver_now_us.to_le_bytes());
         out.extend_from_slice(&e.receiver_ipv4);
+        if let Some(h) = &e.health {
+            out.push(h.flags);
+            for v in [
+                h.device_queue_us,
+                h.device_rate_ppb as u32,
+                h.device_lead_us,
+                h.trims,
+                h.skips,
+                h.inserts,
+            ] {
+                out.extend_from_slice(&v.to_le_bytes());
+            }
+        }
     }
     out
 }

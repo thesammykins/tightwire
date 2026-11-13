@@ -141,9 +141,12 @@ pub struct SharedStats {
     pub cadence_frames: AtomicU64,
     pub cadence_interval_sum_us: AtomicU64,
     pub cadence_interval_max_us: AtomicU32,
-    /// Output frames the device holds queued beyond the one being played,
-    /// as measured by the backend (WASAPI padding); µs at the output rate.
+    /// Audio the output endpoint holds queued after a callback (WASAPI
+    /// padding), averaged by the backend; µs at the output rate. Latency
+    /// on top of the jitter buffer.
     pub device_queue_us: AtomicU32,
+    /// 1 once the backend gave up on exclusive mode for this run (watchdog).
+    pub exclusive_fallback: AtomicU32,
 }
 
 impl SharedStats {

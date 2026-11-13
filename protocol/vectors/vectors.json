@@ -629,6 +629,112 @@
    }
   },
   {
+   "name": "stats_health_no_output",
+   "kind": "stats",
+   "hex": "5457495202024523000000008813000000000000000000000000000000000000000000007e130000efcdab89674523010200000200000000000000000000000000000000204e0000e001000080bb00000000000000000000000000000000000000000000000200027e1100000000000000000000000000000000000080f0fa0200000000c000021400000000000000000000000000000000000000000000000000ebb9f7ec8de9dfe9",
+   "fields": {
+    "stream_id": 9029,
+    "depth_us": 0,
+    "received": 5000,
+    "lost": 0,
+    "late": 0,
+    "drift_ppm": 0,
+    "underruns": 0,
+    "auth_dropped": 0,
+    "echo_seq": 4990,
+    "session_nonce": 81985529216486895,
+    "ext": {
+     "output_mode": 0,
+     "stream_channels": 0,
+     "output_channels": 2,
+     "target_us": 0,
+     "jitter_mean_us": 0,
+     "jitter_peak_us": 0,
+     "min_target_us": 0,
+     "max_target_us": 20000,
+     "output_period_frames": 480,
+     "output_rate": 48000,
+     "stream_rate": 0,
+     "drift_ppb": 0,
+     "duplicates": 0,
+     "concealed_frames": 0,
+     "resets": 0,
+     "ring_fill": 512,
+     "ring_capacity": 512,
+     "ring_full": 4478,
+     "marker_timestamp": 0,
+     "marker_output_us": 0,
+     "receiver_now_us": 50000000,
+     "receiver_ipv4": "192.0.2.20",
+     "health": {
+      "flags": 0,
+      "device_queue_us": 0,
+      "device_rate_ppb": 0,
+      "device_lead_us": 0,
+      "trims": 0,
+      "skips": 0,
+      "inserts": 0
+     }
+    }
+   },
+   "auth": {
+    "key": "r2m"
+   }
+  },
+  {
+   "name": "stats_health_saturated",
+   "kind": "stats",
+   "hex": "54574952020245238c230000905f01000000000000000000e80300002500000000000000865f0100efcdab8967452301020102025a2300000a000000860b000000000000204e00009000000080bb000080bb000040420f00000000000000000001000000000000020000000000000000000000000000000000000000001c4e0e00000000c00002140fb80b00009031dfff82140000030000000c000000040000000ef3f2298b26f656",
+   "fields": {
+    "stream_id": 9029,
+    "depth_us": 9100,
+    "received": 90000,
+    "lost": 0,
+    "late": 0,
+    "drift_ppm": 1000,
+    "underruns": 37,
+    "auth_dropped": 0,
+    "echo_seq": 89990,
+    "session_nonce": 81985529216486895,
+    "ext": {
+     "output_mode": 1,
+     "stream_channels": 2,
+     "output_channels": 2,
+     "target_us": 9050,
+     "jitter_mean_us": 10,
+     "jitter_peak_us": 2950,
+     "min_target_us": 0,
+     "max_target_us": 20000,
+     "output_period_frames": 144,
+     "output_rate": 48000,
+     "stream_rate": 48000,
+     "drift_ppb": 1000000,
+     "duplicates": 0,
+     "concealed_frames": 0,
+     "resets": 1,
+     "ring_fill": 0,
+     "ring_capacity": 512,
+     "ring_full": 0,
+     "marker_timestamp": 0,
+     "marker_output_us": 0,
+     "receiver_now_us": 240000000,
+     "receiver_ipv4": "192.0.2.20",
+     "health": {
+      "flags": 15,
+      "device_queue_us": 3000,
+      "device_rate_ppb": -2150000,
+      "device_lead_us": 5250,
+      "trims": 3,
+      "skips": 12,
+      "inserts": 4
+     }
+    }
+   },
+   "auth": {
+    "key": "r2m"
+   }
+  },
+  {
    "name": "bad_magic",
    "kind": "invalid",
    "hex": "545749580201341207000000500100000000000001010000000000000000003f000000bf0000803f000080bf0000803e000000be0000803af465bca903b7dada",

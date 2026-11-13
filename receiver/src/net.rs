@@ -15,7 +15,7 @@ use crate::handoff::{self, HandoffWorker};
 use crate::ingress::{Action, DropInfo, Ingress};
 use crate::output::OutputFormat;
 use crate::pairing::ConfigFile;
-use crate::protocol::{self, Packet, Stats, StatsExt, TuningAck, TuningResult};
+use crate::protocol::{self, Packet, Stats, StatsExt, StatsHealth, TuningAck, TuningResult};
 use crate::tuning::Tuning;
 
 /// Where the session keys come from.
@@ -200,6 +200,7 @@ pub fn spawn(
             let mut next_tick = Instant::now() + Duration::from_secs(1);
             let mut next_summary = Instant::now() + SUMMARY_EVERY;
             let mut last_audio: Option<Instant> = None;
+            let mut health = HealthTracker::default();
             while !sp.load(Relaxed) {
                 match sock.recv_from(&mut buf) {
                     Ok((n, from)) => {
@@ -297,13 +298,20 @@ pub fn spawn(
                     continue;
                 }
                 next_tick += Duration::from_secs(1);
+                health.tick(&stats);
 
                 // Stats once per second while audio flows.
                 if let (Some(k), Some(peer), Some(t)) = (ing.keys(), ing.audio_peer(), last_audio)
                     && t.elapsed() < Duration::from_secs(3)
                 {
                     let s = Stats {
-                        ext: Some(stats_ext(&stats, &output, &tx, ing.local_ipv4(peer.ip()))),
+                        ext: Some(stats_ext(
+                            &stats,
+                            &output,
+                            &tx,
+                            ing.local_ipv4(peer.ip()),
+                            &health,
+                        )),
                         stream_id: ing.current_stream().unwrap_or(0),
                         depth_us: stats.depth_us.load(Relaxed),
                         received: stats.received.load(Relaxed) as u32,
@@ -319,7 +327,7 @@ pub fn spawn(
                         sock.send_to(&auth::seal(&k.r2m, None, protocol::encode_stats(&s)), peer);
                     if Instant::now() >= next_summary {
                         next_summary = Instant::now() + SUMMARY_EVERY;
-                        let _ = handoff_tx.send(Job::Note(summary_line(&stats)));
+                        let _ = handoff_tx.send(Job::Note(summary_line(&stats, &output)));
                     }
                 }
 
@@ -425,12 +433,61 @@ pub fn apply_tuning(m: &protocol::TuningSet, stats: &SharedStats) -> (TuningAck,
     }
 }
 
+/// Once-a-second view of output health for the stats health block (and
+/// the tray): is a device really rendering, and are underruns climbing.
+#[derive(Debug, Default, Clone)]
+pub struct HealthTracker {
+    last_callbacks: u64,
+    rendering: bool,
+    /// Underrun counter at each of the last 10 ticks (oldest first).
+    underruns: std::collections::VecDeque<u64>,
+}
+
+impl HealthTracker {
+    /// Call once a second.
+    pub fn tick(&mut self, s: &SharedStats) {
+        let cb = s.callbacks.load(Relaxed);
+        self.rendering = cb != self.last_callbacks;
+        self.last_callbacks = cb;
+        self.underruns.push_back(s.underruns.load(Relaxed));
+        if self.underruns.len() > 10 {
+            self.underruns.pop_front();
+        }
+    }
+
+    /// Underruns in the last ~10 s.
+    pub fn recent_underruns(&self) -> u64 {
+        match (self.underruns.front(), self.underruns.back()) {
+            (Some(a), Some(b)) => b.saturating_sub(*a),
+            _ => 0,
+        }
+    }
+
+    pub fn flags(&self, s: &SharedStats, out: &OutputFormat) -> u8 {
+        let mut f = 0;
+        if out.mode != protocol::OutputMode::None && self.rendering {
+            f |= protocol::HEALTH_OUTPUT_OPEN;
+        }
+        if s.saturated.load(Relaxed) == 1 {
+            f |= protocol::HEALTH_SATURATED;
+        }
+        if self.recent_underruns() > 1 {
+            f |= protocol::HEALTH_UNDERRUNS;
+        }
+        if s.exclusive_fallback.load(Relaxed) == 1 {
+            f |= protocol::HEALTH_EXCLUSIVE_FALLBACK;
+        }
+        f
+    }
+}
+
 /// The stats extension from the engine's published counters.
-fn stats_ext(
+pub fn stats_ext(
     s: &SharedStats,
     out: &OutputFormat,
     tx: &rtrb::Producer<Slot>,
     receiver_ipv4: [u8; 4],
+    health: &HealthTracker,
 ) -> StatsExt {
     let cap = crate::engine::RING_SLOTS;
     StatsExt {
@@ -458,13 +515,46 @@ fn stats_ext(
         marker_output_us: s.marker_output_us.load(Relaxed),
         receiver_now_us: (clock::now_s() * 1e6) as u64,
         receiver_ipv4,
+        health: Some(StatsHealth {
+            flags: health.flags(s, out),
+            device_queue_us: s.device_queue_us.load(Relaxed),
+            device_rate_ppb: s.device_rate_ppb.load(Relaxed),
+            device_lead_us: s.device_lead_us.load(Relaxed),
+            trims: s.trims.load(Relaxed) as u32,
+            skips: s.skips.load(Relaxed) as u32,
+            inserts: s.inserts.load(Relaxed) as u32,
+        }),
     }
 }
 
-/// The 10-second log summary (same fields as the Mac's).
-pub fn summary_line(s: &SharedStats) -> String {
+/// The 10-second log summary (same leading fields as the Mac's), then what
+/// the output device actually did over those 10 s: callbacks per second,
+/// the interval between them (mean/max), frames consumed per wall-second
+/// against nominal, its long-run rate, how far it pulls ahead, and audio
+/// queued in the endpoint. Takes (resets) the cadence counters.
+pub fn summary_line(s: &SharedStats, out: &OutputFormat) -> String {
+    let cb = s.cadence_callbacks.swap(0, Relaxed);
+    let frames = s.cadence_frames.swap(0, Relaxed);
+    let span_us = s.cadence_interval_sum_us.swap(0, Relaxed);
+    let max_us = s.cadence_interval_max_us.swap(0, Relaxed);
+    let device = if cb > 0 && span_us > 0 {
+        let span = span_us as f64 / 1e6;
+        let consumed_ppm = (frames as f64 / span / out.rate as f64 - 1.0) * 1e6;
+        format!(
+            "device: {:.0} callbacks/s interval {:.2}/{:.2} ms mean/max, {:+.0} ppm frames/s vs nominal (rate {:+.0} ppm), lead {:.2} ms, queued {:.2} ms",
+            cb as f64 / span,
+            span_us as f64 / 1e3 / cb as f64,
+            max_us as f64 / 1e3,
+            consumed_ppm,
+            s.device_rate_ppb.load(Relaxed) as f64 / 1e3,
+            s.device_lead_us.load(Relaxed) as f64 / 1e3,
+            s.device_queue_us.load(Relaxed) as f64 / 1e3,
+        )
+    } else {
+        "device: no callbacks".to_owned()
+    };
     format!(
-        "stats: buffer {:.2} ms target {:.2} ms (floor {:.1}, cap {:.1}) jitter {:.2}/{:.2} ms mean/peak lost {} late {} underruns {} concealed {} drift {:+.1} ppm {} Hz {} ch",
+        "stats: buffer {:.2} ms target {:.2} ms (floor {:.1}, cap {:.1}) jitter {:.2}/{:.2} ms mean/peak lost {} late {} underruns {} concealed {} drift {:+.1} ppm {} Hz {} ch | {device} | trims {} skips {} inserts {}{}",
         s.depth_us.load(Relaxed) as f64 / 1000.0,
         s.target_us.load(Relaxed) as f64 / 1000.0,
         s.min_target_us.load(Relaxed) as f64 / 1000.0,
@@ -478,6 +568,14 @@ pub fn summary_line(s: &SharedStats) -> String {
         s.drift_ppb.load(Relaxed) as f64 / 1000.0,
         s.stream_rate.load(Relaxed),
         s.stream_channels.load(Relaxed),
+        s.trims.load(Relaxed),
+        s.skips.load(Relaxed),
+        s.inserts.load(Relaxed),
+        if s.saturated.load(Relaxed) == 1 {
+            " | drift loop saturated"
+        } else {
+            ""
+        },
     )
 }
 
