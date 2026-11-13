@@ -554,7 +554,7 @@ pub fn summary_line(s: &SharedStats, out: &OutputFormat) -> String {
         "device: no callbacks".to_owned()
     };
     format!(
-        "stats: buffer {:.2} ms target {:.2} ms (floor {:.1}, cap {:.1}) jitter {:.2}/{:.2} ms mean/peak lost {} late {} underruns {} concealed {} drift {:+.1} ppm {} Hz {} ch | {device} | trims {} skips {} inserts {}{}",
+        "stats: buffer {:.2} ms target {:.2} ms (floor {:.1}, cap {:.1}) jitter {:.2}/{:.2} ms mean/peak lost {} late {} underruns {} concealed {} drift {:+.1} ppm {} Hz {} ch | {device} | trims {} skips {} inserts {} | endpoint starved {} skipped events {}{}",
         s.depth_us.load(Relaxed) as f64 / 1000.0,
         s.target_us.load(Relaxed) as f64 / 1000.0,
         s.min_target_us.load(Relaxed) as f64 / 1000.0,
@@ -571,6 +571,8 @@ pub fn summary_line(s: &SharedStats, out: &OutputFormat) -> String {
         s.trims.load(Relaxed),
         s.skips.load(Relaxed),
         s.inserts.load(Relaxed),
+        s.device_starved.load(Relaxed),
+        s.spurious_events.load(Relaxed),
         if s.saturated.load(Relaxed) == 1 {
             " | drift loop saturated"
         } else {

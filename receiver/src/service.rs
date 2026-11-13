@@ -132,8 +132,7 @@ impl Receiver {
             },
             stats.clone(),
         );
-        let sock =
-            UdpSocket::bind((o.bind, o.port)).map_err(|e| format!("UDP port {}: {e}", o.port))?;
+        let sock = UdpSocket::bind((o.bind, o.port)).map_err(|e| port_error(o.port, &e))?;
         crate::twlog!("listening on UDP {}", sock.local_addr()?);
         let net = net::spawn(
             sock,
@@ -188,11 +187,34 @@ impl Receiver {
     }
 }
 
-/// Short state for menus: unpaired / searching / streaming.
-pub fn phase(s: &SharedStats, n: &NetStatus) -> &'static str {
+/// A failed bind of the receiver's UDP port, in words: "in use" almost
+/// always means another Tightwire (tray or CLI) is already running.
+pub fn port_error(port: u16, e: &std::io::Error) -> String {
+    if e.kind() == std::io::ErrorKind::AddrInUse || e.raw_os_error() == Some(10048) {
+        format!(
+            "UDP port {port} is already in use — another Tightwire (the tray app or a tightwire.exe command) is probably running; quit it first ({e})"
+        )
+    } else {
+        format!("UDP port {port}: {e}")
+    }
+}
+
+/// How recently an authenticated packet must have arrived to count as
+/// streaming.
+const STREAMING_WITHIN: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Short state for menus: unpaired / searching / streaming. Streaming means
+/// the paired Mac's packets are arriving; it no longer follows the jitter
+/// buffer's playing flag, which dropped on every underrun and made the tray
+/// flap between "searching" and "streaming".
+pub fn phase(n: &NetStatus) -> &'static str {
     if n.paired_with.is_none() {
         "unpaired"
-    } else if s.playing.load(Relaxed) == 1 {
+    } else if n
+        .last_auth
+        .and_then(|t| t.elapsed().ok())
+        .is_some_and(|age| age < STREAMING_WITHIN)
+    {
         "streaming"
     } else {
         "searching"
@@ -227,4 +249,17 @@ pub fn status_line(s: &SharedStats, n: &NetStatus) -> String {
         s.drift_ppm.load(Relaxed),
         s.auth_dropped.load(Relaxed) + s.replayed.load(Relaxed),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn port_in_use_names_the_likely_cause() {
+        let e = std::io::Error::from(std::io::ErrorKind::AddrInUse);
+        assert!(port_error(4810, &e).contains("another Tightwire"));
+        let e = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert!(!port_error(4810, &e).contains("another Tightwire"));
+    }
 }

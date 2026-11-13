@@ -32,17 +32,18 @@ pub struct OutputChoice {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TraySettings {
     pub output: Option<OutputChoice>,
-    /// Exclusive-mode preference per endpoint id; missing = `default_exclusive`.
+    /// Exclusive-mode preference per endpoint id; missing = off.
     pub exclusive: BTreeMap<String, bool>,
 }
 
-/// Exclusive mode is the default only for dedicated virtual endpoints, where
-/// locking out other apps is the point: Wave Link's channels ("… (Elgato
-/// Virtual Audio)") and VB-Cable ("CABLE Input"). Real speakers default to
-/// shared so other sounds keep playing.
-pub fn default_exclusive(name: &str) -> bool {
-    name.to_lowercase().contains("elgato virtual audio") || name.contains("CABLE")
-}
+/// Exclusive mode is strictly opt-in (0.2.1), for every endpoint. 0.2.0
+/// turned it on by default for virtual endpoints by name; in the field one
+/// such endpoint accepted exclusive mode and then delivered its buffers in
+/// bursts at an off-nominal rate, which shared mode on the same endpoint
+/// did not. The tray describes it as experimental for virtual devices, and
+/// the exclusive-mode watchdog (`watchdog.rs`) turns it off again if it
+/// misbehaves.
+pub const DEFAULT_EXCLUSIVE: bool = false;
 
 impl TraySettings {
     /// Parses tray.conf. Unknown or malformed lines are skipped and returned
@@ -129,8 +130,8 @@ impl TraySettings {
     }
 
     /// Where the exclusive preference for `id` comes from, for `doctor`: an
-    /// explicit `exclusive.<id> = on|off` line (written only by the tray's
-    /// Exclusive mode toggle), or the name-based default.
+    /// explicit `exclusive.<id> = on|off` line (written by the tray's
+    /// Exclusive mode toggle or its watchdog), or the default (off).
     pub fn exclusive_source(&self, id: &str) -> &'static str {
         let saved = self.exclusive.contains_key(id)
             || self
@@ -138,17 +139,14 @@ impl TraySettings {
                 .as_ref()
                 .is_some_and(|o| self.exclusive.contains_key(&o.id));
         if saved {
-            "saved in tray.conf by the tray's Exclusive mode toggle"
+            "saved in tray.conf (the tray's Exclusive mode toggle, or its watchdog)"
         } else {
-            "default for this endpoint name"
+            "default (off; exclusive mode is opt-in)"
         }
     }
 
-    pub fn exclusive_for(&self, id: &str, name: &str) -> bool {
-        self.exclusive
-            .get(id)
-            .copied()
-            .unwrap_or_else(|| default_exclusive(name))
+    pub fn exclusive_for(&self, id: &str) -> bool {
+        self.exclusive.get(id).copied().unwrap_or(DEFAULT_EXCLUSIVE)
     }
 
     /// Records an explicit pick from the device menu.
@@ -213,7 +211,7 @@ pub fn plan(s: &TraySettings, endpoints: &[Endpoint]) -> Plan {
             .get(&ep.id)
             .or_else(|| s.exclusive.get(&choice.id))
             .copied()
-            .unwrap_or_else(|| default_exclusive(&ep.name)),
+            .unwrap_or(DEFAULT_EXCLUSIVE),
         rebound,
     };
     if !choice.id.is_empty()
@@ -274,6 +272,62 @@ pub fn resample_note(stream_rate: u32, out_rate: u32) -> Option<String> {
     Some(s)
 }
 
+/// Plain-words meaning of a WASAPI/COM failure while opening an output,
+/// and what the user can do. Codes from audioclient.h (checked against the
+/// `windows` crate in `output/wasapi.rs`); meanings from Microsoft's
+/// IAudioClient::Initialize documentation.
+pub fn explain_hresult(code: u32) -> Option<(&'static str, &'static str)> {
+    Some(match code {
+        0x8889_000A => (
+            "the endpoint is in use: another app holds it in exclusive mode (or it is in shared use and exclusive mode was asked for)",
+            "close the app that holds it, or untick \"Allow applications to take exclusive control of this device\" for it in Sound settings › More sound settings › Properties › Advanced. A virtual cable that is also (or shares hardware with) the Windows default output is often held this way; choose another endpoint or another default",
+        ),
+        0x8889_0008 => (
+            "the endpoint does not accept the audio format",
+            "check its format in Sound settings › More sound settings › Properties › Advanced",
+        ),
+        0x8889_0004 | 0x8889_000F => (
+            "the endpoint was unplugged, disabled or reconfigured",
+            "Tightwire opens it again when Windows reports it back",
+        ),
+        0x8889_000E => (
+            "exclusive use of this endpoint is turned off in Windows",
+            "use shared mode, or allow exclusive control in the endpoint's Advanced properties",
+        ),
+        0x8889_0010 => (
+            "the Windows Audio service is not running",
+            "start it in Services (Windows Audio), or restart the PC",
+        ),
+        0x8889_0017 => (
+            "the audio engine is overloaded (CPU)",
+            "close heavy audio apps or use shared mode",
+        ),
+        0x8889_0026 => (
+            "the stream's resources were invalidated (stream suspended or an exclusive stream disconnected)",
+            "Tightwire reopens it",
+        ),
+        0x8889_0028 => (
+            "another app holds the shared engine at a different period",
+            "Tightwire uses the period in force",
+        ),
+        0x8007_0005 => ("access denied", "check Windows privacy settings for audio"),
+        _ => return None,
+    })
+}
+
+/// `msg` with the plain-words meaning and hint for any `0x8889xxxx`-style
+/// code it contains, e.g. "could not open X: 0x8889000A …".
+pub fn describe_open_error(msg: &str) -> String {
+    let code = msg
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter_map(|w| w.strip_prefix("0x").or_else(|| w.strip_prefix("0X")))
+        .find_map(|h| u32::from_str_radix(h, 16).ok().filter(|_| h.len() == 8));
+    match code.and_then(explain_hresult) {
+        Some((what, hint)) => format!("{msg} — {what}. {hint}."),
+        None => msg.to_owned(),
+    }
+}
+
 /// Balloon text when nothing is chosen (Windows caps balloons at 255 chars).
 pub const CHOOSE_OUTPUT_BALLOON: &str = "Choose where the Mac's audio goes: right-click › Output device. Pick a dedicated virtual endpoint (a Wave Link channel, or VB-Cable's \"CABLE Input\"), not your speakers.";
 
@@ -288,8 +342,10 @@ speakers or headphones:
     mix device they record from.
   - VB-Cable: choose \"CABLE Input\"; apps record from \"CABLE Output\".
 Whatever plays into the chosen endpoint is what Windows apps hear as the mic.
-Exclusive mode (tray › Exclusive mode) is on by default for these endpoints
-and keeps other apps from playing into them.";
+Shared mode is the default. Exclusive mode (tray › Exclusive mode) keeps other
+apps from playing into the endpoint and can lower latency, but is
+experimental for virtual devices: if it misbehaves, Tightwire switches back
+to shared mode and says why.";
 
 #[cfg(test)]
 mod tests {
@@ -340,7 +396,7 @@ mod tests {
     }
 
     #[test]
-    fn chosen_endpoint_opens_by_id_with_default_exclusive() {
+    fn chosen_endpoint_opens_by_id_in_shared_mode_by_default() {
         let mut s = TraySettings::default();
         s.choose(&sample_pc()[2]);
         assert_eq!(
@@ -348,11 +404,11 @@ mod tests {
             Plan::Open {
                 id: "{0.0.0.00000000}.{a3}".into(),
                 name: "Games (Elgato Virtual Audio)".into(),
-                exclusive: true,
+                exclusive: false,
                 rebound: false
             }
         );
-        // The TV, if explicitly chosen, defaults to shared mode.
+        // So does the TV, if explicitly chosen.
         s.choose(&sample_pc()[3]);
         assert!(matches!(
             plan(&s, &sample_pc()),
@@ -363,11 +419,10 @@ mod tests {
         ));
     }
 
-    /// A doctor report showed "mode preference: shared" for this endpoint.
-    /// The default is exclusive, also after migrating 0.1.0's name-only
-    /// tray.conf, so "shared" can only come from a saved toggle.
+    /// Exclusive mode is opt-in also after migrating 0.1.0's name-only
+    /// tray.conf; only a saved toggle turns it on.
     #[test]
-    fn wave_link_aux_defaults_to_exclusive_also_after_migration() {
+    fn virtual_endpoint_defaults_to_shared_also_after_migration() {
         let aux = ep(
             "{0.0.0.00000000}.{aux1}",
             "Aux 1 (Elgato Virtual Audio)",
@@ -378,21 +433,18 @@ mod tests {
         assert!(matches!(
             plan(&old, std::slice::from_ref(&aux)),
             Plan::Open {
-                exclusive: true,
+                exclusive: false,
                 rebound: true,
                 ..
             }
         ));
-        assert_eq!(
-            old.exclusive_source(&aux.id),
-            "default for this endpoint name"
-        );
+        assert!(old.exclusive_source(&aux.id).contains("opt-in"));
         let mut toggled = old.clone();
-        toggled.exclusive.insert(aux.id.clone(), false);
+        toggled.exclusive.insert(aux.id.clone(), true);
         assert!(matches!(
             plan(&toggled, std::slice::from_ref(&aux)),
             Plan::Open {
-                exclusive: false,
+                exclusive: true,
                 ..
             }
         ));
@@ -400,18 +452,21 @@ mod tests {
     }
 
     #[test]
-    fn exclusive_defaults_and_overrides() {
-        assert!(default_exclusive("Games (Elgato Virtual Audio)"));
-        assert!(default_exclusive("CABLE Input (VB-Audio Virtual Cable)"));
-        assert!(!default_exclusive("Living Room TV (HD Audio Device)"));
-        assert!(!default_exclusive("Speakers (Realtek(R) Audio)"));
+    fn exclusive_is_opt_in_for_every_name() {
         let mut s = TraySettings::default();
+        for name in [
+            "Games (Elgato Virtual Audio)",
+            "CABLE Input (VB-Audio Virtual Cable)",
+            "Speakers (Realtek(R) Audio)",
+        ] {
+            assert!(!s.exclusive_for(name));
+        }
         s.choose(&sample_pc()[2]);
-        s.exclusive.insert("{0.0.0.00000000}.{a3}".into(), false);
+        s.exclusive.insert("{0.0.0.00000000}.{a3}".into(), true);
         assert!(matches!(
             plan(&s, &sample_pc()),
             Plan::Open {
-                exclusive: false,
+                exclusive: true,
                 ..
             }
         ));
@@ -534,6 +589,19 @@ mod tests {
             "Living Room TV (HD Audio Device) — system default, not recommended"
         );
         assert_eq!(menu_label(&ep("i", "R&D Speakers", false)), "R&&D Speakers");
+    }
+
+    #[test]
+    fn open_errors_are_explained_in_plain_words() {
+        let m = describe_open_error("could not open \"Example 8-ch Cable\": 0x8889000A");
+        assert!(
+            m.contains("in use") && m.contains("exclusive control"),
+            "{m}"
+        );
+        let m = describe_open_error("Error 0x88890004 while starting");
+        assert!(m.contains("unplugged"), "{m}");
+        assert_eq!(describe_open_error("timeout"), "timeout");
+        assert_eq!(describe_open_error("0x1234"), "0x1234");
     }
 
     #[test]

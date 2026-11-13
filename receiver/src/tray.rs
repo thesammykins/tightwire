@@ -46,6 +46,7 @@ use crate::pairing::{self, ConfigFile, PairEvent, PairOptions};
 use crate::protocol::{self, DeckTarget};
 use crate::runstatus::{self, RuntimeStatus};
 use crate::service::{self, Receiver};
+use crate::watchdog::ExclusiveWatchdog;
 use crate::{applog, deck, twlog};
 
 const WM_APP_TRAY: u32 = WM_APP + 1;
@@ -67,6 +68,15 @@ const MAX_DEVICES: usize = 50;
 /// How often a missing or failed output is looked for again.
 const WAITING_RECHECK: Duration = Duration::from_secs(5);
 const FAILED_RECHECK: Duration = Duration::from_secs(10);
+/// Failed-open retries are logged at most this often (with a count); the
+/// first failure and the eventual success are always logged.
+const RETRY_LOG_EVERY: Duration = Duration::from_secs(60);
+/// Listing endpoints runs on a helper thread and is abandoned after this,
+/// so a stuck audio service cannot freeze the tray.
+const LIST_TIMEOUT: Duration = Duration::from_secs(5);
+/// Named mutex for one tray per Windows session.
+const INSTANCE_MUTEX: PCWSTR = w!("Local\\TightwireTray");
+
 /// After the Mac accepts a deck request, how long to wait for its handoff
 /// offer/release before logging that none came.
 const DECK_WATCH: Duration = Duration::from_secs(20);
@@ -115,7 +125,16 @@ struct App {
     plan: Plan,
     /// The chosen endpoint is present but could not be opened.
     output_error: Option<String>,
+    /// Failed open attempts in a row, and when a retry was last logged.
+    failed_attempts: u32,
+    retry_logged: Option<Instant>,
     next_output_check: Instant,
+    /// Health watchdog while an exclusive stream runs.
+    watchdog: Option<ExclusiveWatchdog>,
+    /// Endpoint id the watchdog moved to shared mode this run (reported to
+    /// the Mac until the user toggles exclusive mode again).
+    fell_back: Option<String>,
+    started: Instant,
     /// The receiver itself (UDP socket) failed to start.
     retry_at: Option<Instant>,
     pairing_busy: bool,
@@ -251,9 +270,25 @@ fn save_settings(app: &App) {
 }
 
 fn refresh_endpoints(app: &mut App) {
-    match crate::output::wasapi::render_endpoints() {
-        Ok(d) => app.endpoints = d,
-        Err(e) => twlog!("could not list output endpoints: {e}"),
+    // On a helper thread with a time-out: COM calls into a wedged audio
+    // service can block indefinitely, and this is the UI thread.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new()
+        .name("tightwire-endpoints".into())
+        .spawn(move || {
+            let _ = tx.send(crate::output::wasapi::render_endpoints().map_err(|e| e.to_string()));
+        });
+    if let Err(e) = spawned {
+        twlog!("could not list output endpoints: {e}");
+        return;
+    }
+    match rx.recv_timeout(LIST_TIMEOUT) {
+        Ok(Ok(d)) => app.endpoints = d,
+        Ok(Err(e)) => twlog!("could not list output endpoints: {e}"),
+        Err(_) => twlog!(
+            "Windows audio did not list the output endpoints within {} s; keeping the last list",
+            LIST_TIMEOUT.as_secs()
+        ),
     }
 }
 
@@ -339,9 +374,14 @@ fn apply_output(app: &mut App) {
         plan = outsel::plan(&app.settings, &app.endpoints);
     }
     stop_receiver(app);
-    // A retry of the same failing open is logged, not notified again.
+    // A retry of the same failing open is logged (rate-limited), not
+    // notified again.
     let was_failing = app.output_error.take().is_some() && app.plan == plan;
+    if !was_failing {
+        app.failed_attempts = 0;
+    }
     app.resample_logged = None;
+    app.watchdog = None;
     let started = match &plan {
         Plan::Open {
             id,
@@ -355,14 +395,35 @@ fn apply_output(app: &mut App) {
                 if *exclusive { "exclusive" } else { "shared" }
             );
             match start_with(service::Backend::Wasapi, Some(id.clone()), *exclusive) {
-                Ok(r) => Ok(r),
+                Ok(r) => {
+                    if app.failed_attempts > 0 {
+                        post(Notice::Info(format!(
+                            "\"{name}\" opened after {} failed attempt{}",
+                            app.failed_attempts,
+                            if app.failed_attempts == 1 { "" } else { "s" }
+                        )));
+                    }
+                    app.failed_attempts = 0;
+                    app.retry_logged = None;
+                    if *exclusive {
+                        app.watchdog = Some(ExclusiveWatchdog::new());
+                    }
+                    Ok(r)
+                }
                 Err(e) => {
-                    let msg = format!("could not open \"{name}\": {e}");
+                    let msg =
+                        outsel::describe_open_error(&format!("could not open \"{name}\": {e}"));
+                    app.failed_attempts += 1;
                     let line = format!("{msg}; retrying every {} s", FAILED_RECHECK.as_secs());
-                    if was_failing {
-                        twlog!("{line}");
-                    } else {
+                    if !was_failing {
                         post(Notice::Error(line));
+                        app.retry_logged = Some(Instant::now());
+                    } else if app
+                        .retry_logged
+                        .is_none_or(|t| t.elapsed() >= RETRY_LOG_EVERY)
+                    {
+                        twlog!("output retry {} still failing: {line}", app.failed_attempts);
+                        app.retry_logged = Some(Instant::now());
                     }
                     app.output_error = Some(msg.clone());
                     app.next_output_check = Instant::now() + FAILED_RECHECK;
@@ -421,6 +482,13 @@ fn apply_output(app: &mut App) {
     match started {
         Ok(r) => {
             twlog!("receiver running: {}", r.description);
+            if let (Plan::Open { id, .. }, Some(fb)) = (&app.plan, &app.fell_back)
+                && id == fb
+            {
+                r.stats
+                    .exclusive_fallback
+                    .store(1, std::sync::atomic::Ordering::Relaxed);
+            }
             app.receiver = Some(r);
             app.retry_at = None;
         }
@@ -605,7 +673,7 @@ fn tray_state(app: &App) -> &'static str {
     let Some(r) = &app.receiver else {
         return "stopped";
     };
-    let net = service::phase(&r.stats, &r.net_status());
+    let net = service::phase(&r.net_status());
     if net == "unpaired" {
         return "unpaired";
     }
@@ -640,6 +708,10 @@ fn show_menu(app: &mut App) {
     let status = status_text(app, paired.as_deref());
     let output_line = match (&app.plan, &app.output_error) {
         (_, Some(e)) => format!("Output problem: {e}"),
+        (p @ Plan::Open { id, .. }, None) if app.fell_back.as_ref() == Some(id) => format!(
+            "{} (shared: exclusive mode misbehaved)",
+            outsel::plan_status(p)
+        ),
         (p, None) => outsel::plan_status(p),
     };
     // SAFETY: menu built, shown and destroyed on the UI thread.
@@ -688,7 +760,7 @@ fn show_menu(app: &mut App) {
         }
         let (ex_flag, ex_on) = match &app.settings.output {
             Some(o) => {
-                let on = app.settings.exclusive_for(&o.id, &o.name);
+                let on = app.settings.exclusive_for(&o.id);
                 (if on { MF_CHECKED } else { MF_UNCHECKED }, true)
             }
             None => (MF_UNCHECKED, false),
@@ -697,7 +769,7 @@ fn show_menu(app: &mut App) {
             menu,
             MF_STRING | ex_flag | if ex_on { MF_ENABLED } else { MF_GRAYED },
             ID_EXCLUSIVE,
-            w!("Exclusive mode (lowest latency)"),
+            w!("Exclusive mode (experimental for virtual devices)"),
         );
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         let pair_label = if paired.is_some() {
@@ -780,7 +852,8 @@ fn command(app: &mut App, id: usize) {
         }
         ID_EXCLUSIVE => {
             if let Some(o) = app.settings.output.clone() {
-                let on = !app.settings.exclusive_for(&o.id, &o.name);
+                let on = !app.settings.exclusive_for(&o.id);
+                app.fell_back = None;
                 twlog!(
                     "exclusive mode {} for \"{}\" (id {})",
                     if on { "on" } else { "off" },
@@ -803,7 +876,7 @@ fn command(app: &mut App, id: usize) {
                     } else {
                         ""
                     },
-                    if app.settings.exclusive_for(&e.id, &e.name) {
+                    if app.settings.exclusive_for(&e.id) {
                         "on"
                     } else {
                         "off"
@@ -875,6 +948,10 @@ fn tick(app: &mut App) {
         }
     }
 
+    if let Some(reason) = watch_exclusive(app) {
+        exclusive_fallback(app, &reason);
+    }
+
     if let Some(r) = &app.receiver {
         for ev in r.take_handoff_events() {
             app.deck_watch = None;
@@ -932,6 +1009,47 @@ fn tick(app: &mut App) {
         app.next_status_write = now + Duration::from_secs(5);
         write_status(app, state);
     }
+}
+
+/// Feeds the exclusive-mode watchdog once a tick; the reason when it trips.
+fn watch_exclusive(app: &mut App) -> Option<String> {
+    let r = app.receiver.as_ref()?;
+    if r.format.mode != protocol::OutputMode::WasapiExclusive {
+        return None;
+    }
+    let w = app.watchdog.as_mut()?;
+    let s = &r.stats;
+    w.observe(
+        app.started.elapsed().as_secs_f64(),
+        s.saturated.load(Ordering::Relaxed) == 1,
+        s.underruns.load(Ordering::Relaxed),
+    )
+}
+
+/// Exclusive mode misbehaved: reopen in shared mode, and keep the endpoint
+/// in shared mode (saved) until the user turns exclusive mode on again.
+fn exclusive_fallback(app: &mut App, reason: &str) {
+    let Plan::Open { id, name, .. } = app.plan.clone() else {
+        return;
+    };
+    twlog!(
+        "exclusive-mode watchdog: {reason}; reopening \"{name}\" in shared mode. Exclusive mode stays off for this output until it is turned on again in the tray"
+    );
+    if let Some(r) = &app.receiver {
+        twlog!("{}", crate::net::summary_line(&r.stats, &r.format));
+    }
+    balloon(
+        app.hwnd,
+        "Tightwire: switched to shared mode",
+        &format!(
+            "Exclusive mode on \"{name}\" was not keeping time ({reason}). Playing in shared mode; turn Exclusive mode on in the menu to try again."
+        ),
+        NIIF_WARNING,
+    );
+    app.settings.exclusive.insert(id.clone(), false);
+    save_settings(app);
+    app.fell_back = Some(id);
+    apply_output(app);
 }
 
 fn drain_notices(app: &mut App) {
@@ -1024,6 +1142,28 @@ pub fn run() {
         );
     }
     twlog!("{}", applog::start_header("tray", std::process::id()));
+    // One tray per Windows session: a second one would only fail to bind
+    // UDP 4810 and sit in "stopped" (field report). The handle is kept for
+    // the life of the process; Windows releases it at exit.
+    // SAFETY: named-mutex creation; GetLastError read immediately after.
+    let _instance = unsafe {
+        let h = windows::Win32::System::Threading::CreateMutexW(None, false, INSTANCE_MUTEX);
+        if windows::Win32::Foundation::GetLastError()
+            == windows::Win32::Foundation::ERROR_ALREADY_EXISTS
+        {
+            twlog!("another Tightwire tray is already running in this session; this one exits");
+            let _ = MessageBoxW(
+                None,
+                w!(
+                    "Tightwire is already running. Look for its icon in the notification area (you may need to click the ^ arrow)."
+                ),
+                w!("Tightwire"),
+                MB_OK | MB_ICONINFORMATION,
+            );
+            return;
+        }
+        h
+    };
     twlog!(
         "pairing file: {}",
         pairing::default_config_path()
@@ -1111,7 +1251,12 @@ pub fn run() {
             endpoints: vec![],
             plan: Plan::ChooseOutput,
             output_error: None,
+            failed_attempts: 0,
+            retry_logged: None,
             next_output_check: Instant::now(),
+            watchdog: None,
+            fell_back: None,
+            started: Instant::now(),
             retry_at: None,
             pairing_busy: false,
             choose_notified: false,

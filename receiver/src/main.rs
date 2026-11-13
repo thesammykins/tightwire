@@ -24,7 +24,7 @@ use tightwire_recv::{clock, protocol};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
 enum Backend {
-    /// WASAPI, exclusive then shared (Windows only).
+    /// WASAPI (Windows only): shared mode, or exclusive with --exclusive.
     Wasapi,
     /// cpal default host (any OS).
     Cpal,
@@ -60,7 +60,12 @@ struct Cli {
     /// Jitter-buffer cap (ms); default 20, or what the Mac set (tuning.conf).
     #[arg(long)]
     max_ms: Option<f64>,
-    /// WASAPI: skip exclusive mode and use shared mode at the smallest period.
+    /// WASAPI: try exclusive mode first (experimental for virtual devices;
+    /// falls back to shared if refused).
+    #[arg(long, conflicts_with = "shared")]
+    exclusive: bool,
+    /// WASAPI: shared mode at the smallest period (the default since 0.2.1;
+    /// kept for scripts).
     #[arg(long)]
     shared: bool,
     #[arg(long, value_enum)]
@@ -297,7 +302,7 @@ fn run(cli: Cli) -> Res<()> {
         backend,
         device: cli.device.clone(),
         device_id,
-        shared: cli.shared,
+        shared: !cli.exclusive,
         period: cli.period,
         port: cli.port,
         bind: cli.bind,
@@ -306,7 +311,8 @@ fn run(cli: Cli) -> Res<()> {
         max_ms: cli.max_ms,
         keys,
         usbip: cli.usbip.clone(),
-    })?;
+    })
+    .map_err(|e| tightwire_recv::outsel::describe_open_error(&e.to_string()))?;
 
     let started = Instant::now();
     let mut depth_samples: Vec<(f64, f64)> = vec![];

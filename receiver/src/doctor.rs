@@ -417,7 +417,12 @@ fn open_test(id: &str, exclusive: bool) -> String {
 
     let out = match WasapiOutput::open(DeviceSel::Id(id.to_owned()), exclusive) {
         Ok(o) => o,
-        Err(e) => return format!("FAILED to open: {e}"),
+        Err(e) => {
+            return format!(
+                "FAILED to open: {}",
+                crate::outsel::describe_open_error(&e.to_string())
+            );
+        }
     };
     let desc = out.describe();
     let fmt = out.format();

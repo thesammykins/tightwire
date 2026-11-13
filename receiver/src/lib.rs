@@ -24,5 +24,6 @@ pub mod service;
 #[cfg(windows)]
 pub mod tray;
 pub mod tuning;
+pub mod watchdog;
 #[cfg(windows)]
 pub mod winconsole;

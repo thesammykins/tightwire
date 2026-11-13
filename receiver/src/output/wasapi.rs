@@ -1,7 +1,16 @@
-//! WASAPI backend (Windows only). Exclusive mode at the device's minimum
-//! period when allowed; otherwise shared mode at the smallest engine period
-//! (IAudioClient3), which is the expected path for virtual endpoints such as
-//! Wave Link's that refuse exclusive mode. Event-driven in both modes.
+//! WASAPI backend (Windows only). Shared mode at the smallest engine period
+//! (IAudioClient3) by default; exclusive mode at the device's minimum period
+//! only when the user turned it on (0.2.1: opt-in, experimental for virtual
+//! devices). Event-driven in both modes.
+//!
+//! Microsoft's rules followed here (IAudioClient::Initialize remarks):
+//! an IAudioClient takes exactly one Initialize, and after a failed one the
+//! client must be released and a fresh one activated before trying again;
+//! an event-driven stream should have its event handle set before it is
+//! released, or the engine can hold it for seconds; in shared mode the
+//! latency through the endpoint buffer is the distance between the write
+//! and read pointers (the padding), not the buffer size; in exclusive
+//! event mode each event hands over one whole buffer of a ping-pong pair.
 //!
 //! UNTESTED ON HARDWARE: this file is compiled and linted for
 //! x86_64-pc-windows-msvc on macOS but has never run (SPEC §7.6).
@@ -18,10 +27,14 @@ use std::thread::JoinHandle;
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
 use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
 use windows::Win32::Media::Audio::{
-    AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED, AUDCLNT_SHAREMODE_EXCLUSIVE, AUDCLNT_SHAREMODE_SHARED,
-    AUDCLNT_STREAMFLAGS_EVENTCALLBACK, DEVICE_STATE_ACTIVE, IAudioClient, IAudioClient3,
-    IAudioRenderClient, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator, WAVEFORMATEX,
-    WAVEFORMATEXTENSIBLE, WAVEFORMATEXTENSIBLE_0, eConsole, eRender,
+    AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED, AUDCLNT_E_BUFFER_TOO_LARGE, AUDCLNT_E_DEVICE_IN_USE,
+    AUDCLNT_E_DEVICE_INVALIDATED, AUDCLNT_E_ENDPOINT_CREATE_FAILED,
+    AUDCLNT_E_ENGINE_PERIODICITY_LOCKED, AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED,
+    AUDCLNT_E_RESOURCES_INVALIDATED, AUDCLNT_E_SERVICE_NOT_RUNNING, AUDCLNT_E_UNSUPPORTED_FORMAT,
+    AUDCLNT_SHAREMODE_EXCLUSIVE, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+    DEVICE_STATE_ACTIVE, IAudioClient, IAudioClient3, IAudioRenderClient, IMMDevice,
+    IMMDeviceEnumerator, MMDeviceEnumerator, WAVEFORMATEX, WAVEFORMATEXTENSIBLE,
+    WAVEFORMATEXTENSIBLE_0, eConsole, eRender,
 };
 use windows::Win32::Media::KernelStreaming::KSDATAFORMAT_SUBTYPE_PCM;
 use windows::Win32::Media::Multimedia::KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
@@ -40,6 +53,23 @@ use crate::clock;
 use crate::engine::Engine;
 use crate::outsel::Endpoint;
 use crate::protocol::OutputMode;
+
+// `outsel::explain_hresult` keys its plain-words table on these codes; it
+// is platform-independent, so pin it to the SDK values here.
+const _: () = {
+    assert!(AUDCLNT_E_DEVICE_IN_USE.0 as u32 == 0x8889_000A);
+    assert!(AUDCLNT_E_UNSUPPORTED_FORMAT.0 as u32 == 0x8889_0008);
+    assert!(AUDCLNT_E_DEVICE_INVALIDATED.0 as u32 == 0x8889_0004);
+    assert!(AUDCLNT_E_ENDPOINT_CREATE_FAILED.0 as u32 == 0x8889_000F);
+    assert!(AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED.0 as u32 == 0x8889_000E);
+    assert!(AUDCLNT_E_SERVICE_NOT_RUNNING.0 as u32 == 0x8889_0010);
+    assert!(AUDCLNT_E_RESOURCES_INVALIDATED.0 as u32 == 0x8889_0026);
+    assert!(AUDCLNT_E_ENGINE_PERIODICITY_LOCKED.0 as u32 == 0x8889_0028);
+};
+
+/// How long opening may take before the device is declared unresponsive,
+/// so a stuck driver cannot freeze the caller (the tray's UI thread).
+const OPEN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 
 const WAVE_FORMAT_PCM: u16 = 1;
 const WAVE_FORMAT_IEEE_FLOAT: u16 = 3;
@@ -331,12 +361,22 @@ struct Negotiated {
     exclusive: bool,
 }
 
+/// Shared mode: how much to keep queued in the endpoint buffer. One engine
+/// period is what the engine reads per pass; the margin covers our own
+/// wake-up jitter. 0.2.0 filled the whole buffer every event, which added
+/// (buffer − period) of latency no stat reported. Grows by a quarter period
+/// each time the engine finds the buffer empty, up to the whole buffer.
+fn shared_target_frames(period: u32, buffer: u32, rate: u32) -> u32 {
+    let margin = (period / 2).max(rate / 1000);
+    (period + margin).min(buffer)
+}
+
 /// 100-ns units for `frames` at `rate`, rounded to nearest.
 fn hns(frames: u32, rate: u32) -> i64 {
     ((10_000_000.0 * frames as f64 / rate as f64) + 0.5) as i64
 }
 
-fn try_exclusive(dev: &IMMDevice, mix: &DeviceFormat) -> Result<Negotiated> {
+fn try_exclusive(dev: &IMMDevice, mix: &DeviceFormat, event: HANDLE) -> Result<Negotiated> {
     // SAFETY: COM calls on objects owned by this thread; format pointers
     // reference locals that outlive each call.
     unsafe {
@@ -372,14 +412,19 @@ fn try_exclusive(dev: &IMMDevice, mix: &DeviceFormat) -> Result<Negotiated> {
             Ok(()) => client,
             Err(e) if e.code() == AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED => {
                 // Documented recovery: use the aligned frame count the driver
-                // reports, on a fresh client.
+                // reports, on a fresh client; the failed one is released first.
                 let frames = client.GetBufferSize()?;
+                drop(client);
                 let c2: IAudioClient = dev.Activate(CLSCTX_ALL, None)?;
                 init(&c2, hns(frames, mix.rate))?;
                 c2
             }
             Err(e) => return Err(e.into()),
         };
+        // Set at once, so that if anything below fails the engine can
+        // release this exclusive stream immediately instead of holding the
+        // device for its time-out.
+        client.SetEventHandle(event)?;
         let buffer_frames = client.GetBufferSize()?;
         let format = DeviceFormat {
             kind,
@@ -476,7 +521,7 @@ fn current_engine_period(client: &IAudioClient) -> Option<u32> {
 /// driver that does not declare small buffers reports min = default (480
 /// frames at 48 kHz = 10 ms), and then nothing below 10 ms exists in shared
 /// mode — only exclusive mode reaches GetDevicePeriod's minimum.
-fn shared(dev: &IMMDevice) -> Result<Negotiated> {
+fn shared(dev: &IMMDevice, event: HANDLE) -> Result<Negotiated> {
     // SAFETY: as in try_exclusive; the mix format copy lives on this stack.
     unsafe {
         let client: IAudioClient = dev.Activate(CLSCTX_ALL, None)?;
@@ -492,6 +537,7 @@ fn shared(dev: &IMMDevice) -> Result<Negotiated> {
                     None,
                 ) {
                     Ok(()) => {
+                        client.SetEventHandle(event)?;
                         let buffer_frames = client.GetBufferSize()?;
                         let current = current_engine_period(&client).unwrap_or(p.min);
                         let mut mode = format!(
@@ -526,6 +572,8 @@ fn shared(dev: &IMMDevice) -> Result<Negotiated> {
             ),
         }
         // Classic shared mode: the engine period is the device default (~10 ms).
+        // A fresh client: a failed Initialize may leave the old one unusable.
+        drop(client);
         let client: IAudioClient = dev.Activate(CLSCTX_ALL, None)?;
         client.Initialize(
             AUDCLNT_SHAREMODE_SHARED,
@@ -535,6 +583,7 @@ fn shared(dev: &IMMDevice) -> Result<Negotiated> {
             &mixext.Format,
             None,
         )?;
+        client.SetEventHandle(event)?;
         let mut def = 0i64;
         client.GetDevicePeriod(Some(&mut def), None)?;
         let period = (def as f64 * mix.rate as f64 / 10_000_000.0).round() as usize;
@@ -551,21 +600,24 @@ fn shared(dev: &IMMDevice) -> Result<Negotiated> {
     }
 }
 
-fn negotiate(sel: &DeviceSel, exclusive: bool) -> Result<(Negotiated, String)> {
+fn negotiate(sel: &DeviceSel, exclusive: bool, event: HANDLE) -> Result<(Negotiated, String)> {
     let (dev, name) = pick_device(sel)?;
     if exclusive {
         // SAFETY: activation to read the mix format for exclusive-mode candidates.
         let probe: IAudioClient = unsafe { dev.Activate(CLSCTX_ALL, None)? };
         let (_, mix) = mix_format(&probe)?;
         drop(probe);
-        match try_exclusive(&dev, &mix) {
+        match try_exclusive(&dev, &mix, event) {
             Ok(n) => return Ok((n, name)),
+            // Every client of the failed attempt was dropped inside
+            // try_exclusive; shared mode starts from a fresh activation.
             Err(e) => crate::twlog!(
-                "exclusive mode refused by \"{name}\" ({e}); using shared mode instead"
+                "exclusive mode refused by \"{name}\" ({}); using shared mode instead",
+                crate::outsel::describe_open_error(&e.to_string())
             ),
         }
     }
-    Ok((shared(&dev)?, name))
+    Ok((shared(&dev, event)?, name))
 }
 
 pub struct WasapiOutput {
@@ -605,7 +657,21 @@ impl WasapiOutput {
                 // SAFETY: balances com_init on this thread.
                 unsafe { CoUninitialize() };
             })?;
-        let (format, describe) = fmt_rx.recv().map_err(|_| "WASAPI thread exited")??;
+        let (format, describe) = match fmt_rx.recv_timeout(OPEN_TIMEOUT) {
+            Ok(r) => r?,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // The thread is stuck in a driver call. Tell it to give up
+                // when it returns; dropping `engine_tx` makes it exit before
+                // rendering, releasing whatever it opened.
+                stop.store(true, Ordering::Relaxed);
+                return Err(format!(
+                    "the device did not answer within {} s (driver busy or stuck); will retry",
+                    OPEN_TIMEOUT.as_secs()
+                )
+                .into());
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Err("WASAPI thread exited".into()),
+        };
         Ok(Self {
             format,
             describe,
@@ -617,6 +683,17 @@ impl WasapiOutput {
     }
 }
 
+struct EventGuard(HANDLE);
+
+impl Drop for EventGuard {
+    fn drop(&mut self) {
+        // SAFETY: the handle came from CreateEventW and is closed once.
+        unsafe {
+            let _ = windows::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
 fn render_thread(
     sel: &DeviceSel,
     exclusive: bool,
@@ -624,38 +701,65 @@ fn render_thread(
     engine_rx: &mpsc::Receiver<Option<Engine>>,
     stop: &AtomicBool,
 ) -> Result<()> {
-    let (n, name) = negotiate(sel, exclusive)?;
+    // SAFETY: an auto-reset event owned by this thread; closed by the guard,
+    // which is declared first so it outlives the client using it.
+    let event = EventGuard(unsafe { CreateEventW(None, false, false, None)? });
+    let event = event.0;
+    let (n, name) = negotiate(sel, exclusive, event)?;
     let f = n.format;
-    // SAFETY: event handle and render client belong to this thread's client.
-    let (event, render): (HANDLE, IAudioRenderClient) = unsafe {
-        let ev = CreateEventW(None, false, false, None)?;
-        n.client.SetEventHandle(ev)?;
-        (ev, n.client.GetService()?)
-    };
+    // SAFETY: the render client belongs to this thread's initialised client.
+    let render: IAudioRenderClient = unsafe { n.client.GetService()? };
+    let buffer = n.buffer_frames;
+    let period = n.period_frames as u32;
+    let mut target = shared_target_frames(period, buffer, f.rate);
     let out = OutputFormat {
         rate: f.rate,
         channels: f.channels,
         period_frames: n.period_frames,
         mode: n.output_mode,
     };
+    let ms = |fr: u32| fr as f64 * 1000.0 / f.rate as f64;
+    let queue = if n.exclusive {
+        format!(
+            "endpoint buffer 2 × {buffer} frames (ping-pong, {:.2} ms each)",
+            ms(buffer)
+        )
+    } else {
+        format!(
+            "endpoint buffer {buffer} frames ({:.2} ms), keeping about {target} frames ({:.2} ms) queued",
+            ms(buffer),
+            ms(target)
+        )
+    };
     let _ = fmt_tx.send(Ok((
         out,
         format!(
-            "wasapi \"{name}\" ({} Hz, {} ch, {:?} {}-bit, {})",
+            "wasapi \"{name}\" ({} Hz, {} ch, {:?} {}-bit, {}; {queue})",
             f.rate, f.channels, f.kind, f.bits, n.mode
         ),
     )));
     let Ok(Some(mut engine)) = engine_rx.recv() else {
         return Ok(()); // dropped without starting
     };
+    if stop.load(Ordering::Relaxed) {
+        return Ok(()); // the opener gave up waiting
+    }
 
     // SAFETY: registers this thread with MMCSS; the task handle is released at
     // thread exit by the OS.
     let _mmcss = unsafe { AvSetMmThreadCharacteristicsW(w!("Pro Audio"), &mut 0) };
     let ch = f.channels;
-    let buffer = n.buffer_frames;
     // Preallocated so the loop never allocates.
     let mut scratch = vec![0f32; buffer as usize * ch];
+    let stats = engine.stats().clone();
+    let us = |fr: f64| (fr * 1e6 / f.rate as f64) as u32;
+    if n.exclusive {
+        // One buffer queued while the other plays.
+        stats
+            .device_queue_us
+            .store(us(buffer as f64), Ordering::Relaxed);
+    }
+    let mut queued_avg = target as f64;
 
     // SAFETY (whole block): GetBuffer returns a device buffer of exactly
     // `frames * nBlockAlign` bytes valid until ReleaseBuffer; we write within it.
@@ -665,6 +769,11 @@ fn render_thread(
             let p = render.GetBuffer(buffer)?;
             std::ptr::write_bytes(p, 0, buffer as usize * ch * (f.bits as usize / 8));
             render.ReleaseBuffer(buffer, 0)?;
+        } else {
+            // Start with the target queued, as silence.
+            let p = render.GetBuffer(target)?;
+            std::ptr::write_bytes(p, 0, target as usize * ch * (f.bits as usize / 8));
+            render.ReleaseBuffer(target, 0)?;
         }
         n.client.Start()?;
         let mut timeouts = 0;
@@ -677,17 +786,39 @@ fn render_thread(
                 continue;
             }
             timeouts = 0;
-            let frames = if n.exclusive {
-                buffer
+            // Take the device buffer before rendering, so a pass the device
+            // cannot accept consumes nothing from the jitter buffer.
+            let (frames, p) = if n.exclusive {
+                match render.GetBuffer(buffer) {
+                    Ok(p) => (buffer, p),
+                    // An event with the previous buffer still queued (a
+                    // driver signalling more often than it plays): skip it.
+                    Err(e) if e.code() == AUDCLNT_E_BUFFER_TOO_LARGE => {
+                        stats.spurious_events.fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+                    Err(e) => return Err(e.into()),
+                }
             } else {
-                buffer - n.client.GetCurrentPadding()?
+                let padding = n.client.GetCurrentPadding()?;
+                if padding == 0 {
+                    // The engine found nothing queued: it played silence.
+                    // Keep a little more from now on.
+                    stats.device_starved.fetch_add(1, Ordering::Relaxed);
+                    target = (target + period / 4).min(buffer);
+                }
+                let frames = target.saturating_sub(padding);
+                if frames == 0 {
+                    continue;
+                }
+                queued_avg += (target as f64 - queued_avg) * 0.05;
+                stats
+                    .device_queue_us
+                    .store(us(queued_avg), Ordering::Relaxed);
+                (frames, render.GetBuffer(frames)?)
             };
-            if frames == 0 {
-                continue;
-            }
             let samples = frames as usize * ch;
             engine.render(&mut scratch[..samples], clock::now_s());
-            let p = render.GetBuffer(frames)?;
             match f.kind {
                 SampleKind::F32 => {
                     std::ptr::copy_nonoverlapping(scratch.as_ptr(), p as *mut f32, samples)

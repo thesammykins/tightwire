@@ -147,6 +147,11 @@ pub struct SharedStats {
     pub device_queue_us: AtomicU32,
     /// 1 once the backend gave up on exclusive mode for this run (watchdog).
     pub exclusive_fallback: AtomicU32,
+    /// Shared mode: events that found the endpoint buffer empty (the engine
+    /// played silence). Exclusive mode: events whose buffer was not free
+    /// (skipped). Both written by the WASAPI render thread.
+    pub device_starved: AtomicU64,
+    pub spurious_events: AtomicU64,
 }
 
 impl SharedStats {
