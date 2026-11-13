@@ -65,6 +65,23 @@ public final class HandoffSequencer: @unchecked Sendable {
         public init(_ d: String) { description = d }
     }
 
+    /// None of the handoff devices is plugged in: nothing was shared, and
+    /// trying again is pointless until one appears.
+    public struct NothingConnected: Error, CustomStringConvertible, Equatable {
+        public var description: String { "None of the handoff devices is connected" }
+        public init() {}
+    }
+
+    /// True when at least one of `devices` is plugged in, as Longcable sees
+    /// it (a status read; shares and registers nothing).
+    public func anyConnected(_ devices: [HandoffDevice]) -> Bool {
+        guard let status = try? longcable.status() else { return false }
+        return devices.contains { d in
+            if let t = Longcable.target(for: d, in: status) { return t.present }
+            return Longcable.local(for: d, in: status) != nil
+        }
+    }
+
     // MARK: Registration
 
     /// Registers a connected device with Longcable and leaves it **unshared**.
@@ -245,7 +262,7 @@ public final class HandoffSequencer: @unchecked Sendable {
         do {
             log("handover to \(pcAddress): \(devices.map(\.name).joined(separator: ", "))")
             let resolved = try resolve(devices)
-            guard !resolved.isEmpty else { throw Failure("None of the handoff devices is connected") }
+            guard !resolved.isEmpty else { throw NothingConnected() }
             try ensurePeerAllowed(pcAddress)
             for (d, id) in resolved {
                 try longcable.share(id)
@@ -382,6 +399,10 @@ public struct HandoffMachine: Equatable, Sendable {
     public private(set) var lastAlive: TimeInterval?
     private var wentAwayWhileHeld = false
     private var retryAt: TimeInterval = 0
+    /// A handover found none of the devices plugged in: no automatic retry
+    /// (no 30 s loop, no sleep-assertion churn) until one appears
+    /// (`devicesAppeared`) or the owner asks again (`request`).
+    public private(set) var waitingForDevice = false
 
     public init(mode: Mode = .auto) {
         self.mode = mode
@@ -421,8 +442,24 @@ public struct HandoffMachine: Equatable, Sendable {
         default:
             mode = .auto
             retryAt = 0
+            waitingForDevice = false
         }
         if alive { lastAlive = now }
+        return next(alive: alive, now: now)
+    }
+
+    /// A handover ended because nothing to hand over is plugged in.
+    public mutating func finishedNothingConnected() {
+        running = nil
+        owner = .mac
+        waitingForDevice = true
+    }
+
+    /// A handoff device is plugged in again: automatic handover may resume.
+    public mutating func devicesAppeared(alive: Bool, now: TimeInterval) -> Command? {
+        guard waitingForDevice else { return nil }
+        waitingForDevice = false
+        retryAt = 0
         return next(alive: alive, now: now)
     }
 
@@ -441,7 +478,7 @@ public struct HandoffMachine: Equatable, Sendable {
         guard running == nil else { return nil }
         let wantPC = mode == .auto && alive && !lost(now)
         let wantMac = mode == .heldOnMac || lost(now)
-        if owner == .mac, wantPC, now >= retryAt {
+        if owner == .mac, wantPC, now >= retryAt, !waitingForDevice {
             running = .handOver
             return .handOver
         }

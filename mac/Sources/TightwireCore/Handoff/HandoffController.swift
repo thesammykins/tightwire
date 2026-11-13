@@ -87,6 +87,9 @@ public final class HandoffController: @unchecked Sendable {
     /// the LAN can send them): one line per 5 s with a count of the rest.
     private let dropLog = Locked(DropLog())
     private let running = Locked(true)
+    /// When `waitingForDevice` last looked for a plugged-in device.
+    private let lastDeviceCheck = Locked<TimeInterval>(0)
+    static let deviceCheckInterval: TimeInterval = 3
     private let queue = DispatchQueue(label: "tightwire.handoff")
     private let clock0 = Date()
     private(set) var sequencer: HandoffSequencer!
@@ -202,12 +205,17 @@ public final class HandoffController: @unchecked Sendable {
         publish()
         queue.async { [self] in
             var ok = true
+            var nothing = false
             switch cmd {
             case .handOver:
                 do {
                     let ids = try sequencer.handOver(devices, pcAddress: pcIP)
                     log("devices on the PC: \(ids.joined(separator: ", "))")
                     state.update { $0.lastError = nil }
+                } catch let e as HandoffSequencer.NothingConnected {
+                    nothing = true
+                    log("\(e); waiting until one is plugged in (or Send to PC) instead of retrying")
+                    state.update { $0.lastError = "\(e): waiting for it to be plugged in" }
                 } catch {
                     ok = false
                     state.update { $0.lastError = "\(error)" }
@@ -216,7 +224,12 @@ public final class HandoffController: @unchecked Sendable {
                 sequencer.handBack(devices, notifyPC: true)
                 log("devices back on the Mac")
             }
-            machine.update { $0.finished(cmd, success: ok, now: now) }
+            if nothing {
+                machine.update { $0.finishedNothingConnected() }
+                lastDeviceCheck.value = now
+            } else {
+                machine.update { $0.finished(cmd, success: ok, now: now) }
+            }
             publish()
             // Re-evaluate: a request may have arrived meanwhile.
             let alive = liveness.value.isLive(at: now)
@@ -242,7 +255,19 @@ public final class HandoffController: @unchecked Sendable {
                 state.update { $0.receiverAlive = alive }
                 log(alive ? "PC is reachable" : "PC stopped answering")
             }
-            guard !settings().devices.isEmpty else { continue }
+            let devices = settings().devices
+            guard !devices.isEmpty else { continue }
+            if machine.value.waitingForDevice, machine.value.running == nil,
+               now - lastDeviceCheck.value >= Self.deviceCheckInterval {
+                // A status read only: cheap, shares nothing, takes no assertion.
+                lastDeviceCheck.value = now
+                if sequencer.anyConnected(devices) {
+                    log("a handoff device is connected again")
+                    state.update { $0.lastError = nil }
+                    if let cmd = machine.update({ $0.devicesAppeared(alive: alive, now: now) }) { run(cmd) }
+                    publish()
+                }
+            }
             if let cmd = machine.update({ $0.update(alive: alive, now: now) }) { run(cmd) }
         }
     }

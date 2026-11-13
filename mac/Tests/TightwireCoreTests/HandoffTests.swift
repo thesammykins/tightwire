@@ -432,6 +432,24 @@ struct MachineTests {
         #expect(m.update(alive: true, now: 31.5) == .handOver)
     }
 
+    /// Field report: with the deck unplugged the Mac retried every 30 s and
+    /// toggled its keep-awake assertion each time. Now it waits.
+    @Test func nothingConnectedWaitsForTheDeviceOrTheOwner() {
+        var m = HandoffMachine()
+        #expect(m.update(alive: true, now: 0) == .handOver)
+        m.finishedNothingConnected()
+        #expect(m.owner == .mac && m.running == nil && m.waitingForDevice)
+        for t in stride(from: 1.0, through: 600, by: 1) {
+            #expect(m.update(alive: true, now: t) == nil)
+        }
+        // Plugged in again.
+        #expect(m.devicesAppeared(alive: true, now: 601) == .handOver)
+        m.finishedNothingConnected()
+        // Or the owner asks.
+        #expect(m.request(.pc, alive: true, now: 700) == .handOver)
+        #expect(!m.waitingForDevice)
+    }
+
     @Test func explicitRequestSkipsBackoff() {
         var m = HandoffMachine()
         _ = m.update(alive: true, now: 0)
