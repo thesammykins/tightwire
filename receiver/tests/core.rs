@@ -381,17 +381,20 @@ fn file_backend_writes_paced_wav() {
     let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("file_backend.wav");
     let out = Box::new(FileOutput::new(path.clone(), RATE, 2, PERIOD, 0.0));
     let (_tx, e, _) = engine(2.0);
+    let started = std::time::Instant::now();
     let running = out.start(e).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(300));
     running.stop().unwrap();
+    // Compared with the time that really passed: a busy CI runner oversleeps.
+    let wall = started.elapsed().as_secs_f64();
     let r = hound::WavReader::open(&path).unwrap();
     assert_eq!(r.spec().channels, 2);
     assert_eq!(r.spec().sample_format, hound::SampleFormat::Float);
     let secs = r.duration() as f64 / RATE as f64;
     // Paced by the virtual clock: roughly real time, not as fast as possible.
     assert!(
-        (0.25..0.4).contains(&secs),
-        "wrote {secs} s for 0.3 s of wall time"
+        (wall - 0.06..wall + 0.06).contains(&secs),
+        "wrote {secs} s for {wall} s of wall time"
     );
 }
 
