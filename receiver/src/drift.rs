@@ -20,8 +20,8 @@
 //! learns two ways: when the loop's integral has sat near its limit for
 //! seconds *and the error has not shrunk meanwhile*, that excess moves into
 //! `tracking`; and when two of the engine's discrete depth steps
-//! (`engine.rs`) or underruns in a row go the same way, 0.5–5 s apart, the
-//! rate they imply is added at once. A start-up or refill transient shrinks
+//! (`engine.rs`) or underruns in a row go the same way, 0.5–5 s apart,
+//! with the loop pinned that way, the rate they imply is added at once. A start-up or refill transient shrinks
 //! while the loop works on it, so it is never learned as a rate.
 
 const OMEGA_N: f64 = 0.5;
@@ -43,6 +43,7 @@ const LEARN_WINDOW_S: f64 = 5.0;
 /// lesson moves the tracked rate by at most this much.
 const LEARN_MIN_GAP_S: f64 = 0.5;
 const MAX_LEARN_STEP: f64 = 3000e-6;
+const LEARN_GAIN: f64 = 0.75;
 /// The loop's integral beyond this fraction of its limit for this long, with
 /// the error no smaller than `HANDOVER_SHRINK` × what it was, is a rate the
 /// loop cannot finish tracking alone; the excess over `HANDOVER_KEEP` moves
@@ -74,8 +75,9 @@ pub struct DriftController {
     handing: bool,
     /// How long the PI output has been at its limit.
     pinned_s: f64,
-    /// Time and sign of the last discrete step (fade-skip / fade-insert).
-    last_step: Option<(f64, f64)>,
+    /// Time and sign of the step (fade-skip / fade-insert / underrun) that
+    /// started the current rate measurement, and depth removed since.
+    last_step: Option<(f64, f64, f64)>,
 }
 
 impl DriftController {
@@ -165,18 +167,46 @@ impl DriftController {
         if let Some(s) = self.smoothed_s.as_mut() {
             *s -= removed_s;
         }
+        self.learn(removed_s, now_s);
+    }
+
+    /// An underrun: the device emptied the buffer (about `lost_s` of depth)
+    /// and playback restarts from a refill, so there is no depth history
+    /// to shift; only the rate lesson applies.
+    pub fn underran(&mut self, lost_s: f64, now_s: f64) {
+        self.learn(-lost_s, now_s);
+    }
+
+    fn learn(&mut self, removed_s: f64, now_s: f64) {
         let dir = removed_s.signum();
-        if let Some((t, d)) = self.last_step
-            && d == dir
-            && now_s - t < LEARN_WINDOW_S
-            && now_s - t >= LEARN_MIN_GAP_S
-        {
-            // Depth grew (or shrank) by `removed_s` in `now − t` seconds
-            // despite the correction: consume that much faster (slower).
-            let rate = (removed_s / (now_s - t)).clamp(-MAX_LEARN_STEP, MAX_LEARN_STEP);
-            self.tracking = (self.tracking + rate).clamp(-MAX_TRACKING, MAX_TRACKING);
+        // Only while the loop is pinned the same way: then the steps are
+        // what its ±1000 ppm could not do. A network stall or burst that
+        // happens to cause two steps leaves the loop unpinned.
+        let pinned_same_way = self.pi.abs() >= MAX_CORRECTION * 0.999 && self.pi.signum() == dir;
+        match self.last_step {
+            Some((t, d, acc)) if d == dir && now_s - t < LEARN_WINDOW_S => {
+                let acc = acc + removed_s;
+                if now_s - t < LEARN_MIN_GAP_S {
+                    // Too close to measure a rate yet: keep counting from t.
+                    self.last_step = Some((t, d, acc));
+                    return;
+                }
+                if pinned_same_way {
+                    // Depth grew (or shrank) by `acc` in `now − t` seconds
+                    // despite the correction: consume that much faster
+                    // (slower).
+                    // Three quarters of it: the loop's own ±1000 ppm was already
+                    // working on it, and over-learning swings the depth
+                    // past the target; repeated steps finish the job.
+                    let rate =
+                        (LEARN_GAIN * acc / (now_s - t)).clamp(-MAX_LEARN_STEP, MAX_LEARN_STEP);
+                    self.tracking = (self.tracking + rate).clamp(-MAX_TRACKING, MAX_TRACKING);
+                }
+            }
+            _ => {}
         }
-        self.last_step = Some((now_s, dir));
+        // The removal at this event happened before the next interval.
+        self.last_step = Some((now_s, dir, 0.0));
     }
 
     pub fn correction(&self) -> f64 {

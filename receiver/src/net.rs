@@ -535,15 +535,15 @@ pub fn stats_ext(
 pub fn summary_line(s: &SharedStats, out: &OutputFormat) -> String {
     let cb = s.cadence_callbacks.swap(0, Relaxed);
     let frames = s.cadence_frames.swap(0, Relaxed);
-    let span_us = s.cadence_interval_sum_us.swap(0, Relaxed);
+    let span_us = s.cadence_interval_sum_ns.swap(0, Relaxed) as f64 / 1e3;
     let max_us = s.cadence_interval_max_us.swap(0, Relaxed);
-    let device = if cb > 0 && span_us > 0 {
-        let span = span_us as f64 / 1e6;
+    let device = if cb > 0 && span_us > 0.0 {
+        let span = span_us / 1e6;
         let consumed_ppm = (frames as f64 / span / out.rate as f64 - 1.0) * 1e6;
         format!(
             "device: {:.0} callbacks/s interval {:.2}/{:.2} ms mean/max, {:+.0} ppm frames/s vs nominal (rate {:+.0} ppm), lead {:.2} ms, queued {:.2} ms",
             cb as f64 / span,
-            span_us as f64 / 1e3 / cb as f64,
+            span_us / 1e3 / cb as f64,
             max_us as f64 / 1e3,
             consumed_ppm,
             s.device_rate_ppb.load(Relaxed) as f64 / 1e3,

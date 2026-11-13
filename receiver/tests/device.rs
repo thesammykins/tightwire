@@ -143,11 +143,50 @@ fn bursts_of_a_16ms_timer() {
     check("burst16", Sender::lan(128), d, steady());
 }
 
+/// A device consuming 0.5 % fast drains a 5 ms buffer in about a second
+/// faster than ±1000 ppm can refill it, so learning its rate from a cold
+/// start costs a few underruns (each one a lesson); none after that.
 #[test]
 fn device_5000ppm_fast() {
     let mut d = exclusive_144();
     d.rate_ppm = 5000.0;
-    check("fast5000", Sender::lan(128), d, steady());
+    check(
+        "fast5000",
+        Sender::lan(128),
+        d,
+        Expect {
+            max_underruns: 5,
+            ..steady()
+        },
+    );
+}
+
+/// The stats line reports what the device consumed per wall-second.
+#[test]
+fn stats_line_reports_the_device_rate() {
+    use tightwire_recv::output::OutputFormat;
+    use tightwire_recv::protocol::OutputMode;
+    let mut d = exclusive_144();
+    d.rate_ppm = 1500.0;
+    let r = run(&Sender::lan(128), &d, Limits::default(), 20.0, |_, _| {});
+    let line = tightwire_recv::net::summary_line(
+        &r.stats,
+        &OutputFormat {
+            rate: RATE,
+            channels: 1,
+            period_frames: 144,
+            mode: OutputMode::WasapiExclusive,
+        },
+    );
+    eprintln!("{line}");
+    let ppm: f64 = line
+        .split(" ppm frames/s vs nominal")
+        .next()
+        .and_then(|s| s.rsplit(' ').next())
+        .and_then(|v| v.parse().ok())
+        .expect(&line);
+    assert!((ppm - 1500.0).abs() < 50.0, "{line}");
+    assert!(line.contains("callbacks/s interval 3.00/"), "{line}");
 }
 
 #[test]

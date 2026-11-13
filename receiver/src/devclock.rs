@@ -66,6 +66,7 @@ pub struct DeviceClock {
     g_tw: f64,
     g_ow: f64,
     g_w: f64,
+    last_frames: u64,
 }
 
 /// Callback cadence over a reporting window.
@@ -103,6 +104,7 @@ impl DeviceClock {
             g_tw: 0.0,
             g_ow: 0.0,
             g_w: 0.0,
+            last_frames: 0,
         }
     }
 
@@ -130,6 +132,8 @@ impl DeviceClock {
             self.cad.interval_sum_s += dt;
             self.cad.interval_max_s = self.cad.interval_max_s.max(dt);
             self.cad.span_s += dt;
+            // The previous callback's frames played over this interval.
+            self.cad.frames += self.last_frames;
             self.last_t = t;
             if t - self.g_t > BURST_GAP_S {
                 self.flush_burst();
@@ -141,7 +145,7 @@ impl DeviceClock {
         self.g_tw += w * t;
         self.g_ow += w * obs;
         self.g_w += w;
-        self.cad.frames += frames as u64;
+        self.last_frames = frames as u64;
         let lead = (before as f64 + f - self.line_at(t)) / self.nominal;
         self.lead_peak_s = self.lead_peak_s.max(lead);
     }

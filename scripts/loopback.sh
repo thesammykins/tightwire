@@ -130,7 +130,7 @@ cat "$OUT/latency.send.txt"
 MARKERS=$(field markers "$OUT/latency.send.txt"); MMED=$(field marker_median_ms "$OUT/latency.send.txt")
 MUNC=$(field marker_unc_ms "$OUT/latency.send.txt"); REV=$(field receiver_revision "$OUT/latency.send.txt")
 DEPTH=$(field depth_avg_ms "$OUT/latency.recv.txt"); FLOOR=$(field floor_ms "$OUT/latency.recv.txt"); CAP=$(field cap_ms "$OUT/latency.recv.txt")
-[[ "$REV" == 1 ]] || fail "latency: receiver revision $REV (want 1)"
+[[ "$REV" == 2 ]] || fail "latency: receiver revision $REV (want 2)"
 [[ "${MARKERS:-0}" -ge 20 ]] || fail "latency: only ${MARKERS:-0} markers measured"
 # Send → output must be about the buffer depth (plus <= 2 ms: half a packet,
 # the 0.5 ms resampler filter and scheduling), never below it by more than the clock uncertainty.

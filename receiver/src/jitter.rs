@@ -153,7 +153,7 @@ pub struct JitterBuffer {
     last_packet_frames: usize,
     /// How far the output device pulls frames ahead of its playout (s):
     /// half a period for a steady device, half a burst for a bursty one
-    /// (`devclock.rs`). Twice this is in the target floor.
+    /// (`devclock.rs`). The target floor includes it once.
     device_lead_s: f64,
     min_target_s: f64,
     max_target_s: f64,
@@ -222,10 +222,15 @@ impl JitterBuffer {
         self.format.map_or(48_000.0, |f| f.sample_rate as f64)
     }
 
-    /// Adaptive target depth in seconds: one packet plus what the output
-    /// device pulls at once (one period, or a whole burst) plus a fixed
-    /// safety margin, plus measured arrival jitter, clamped to
-    /// [--target-ms, --max-ms].
+    /// Adaptive target depth in seconds: one packet plus how far the output
+    /// device pulls ahead of its playout (half a period, or half a burst)
+    /// plus a fixed safety margin, plus measured arrival jitter, clamped to
+    /// [--target-ms, --max-ms]. The depth is the time average measured
+    /// against the device's playout line, so its minimum just before a
+    /// pull is about target − packet/2 − lead: the floor leaves half a
+    /// packet plus the margin. 0.2.0's "packet + one period" floor was the
+    /// same real depth for a steady device, because its measurement read
+    /// half a period high.
     pub fn target_s(&self) -> f64 {
         (self.floor_s() + self.jitter.needed())
             .max(self.min_target_s)
@@ -234,7 +239,7 @@ impl JitterBuffer {
 
     /// The adaptive floor before jitter and limits.
     fn floor_s(&self) -> f64 {
-        self.last_packet_frames as f64 / self.rate() + 2.0 * self.device_lead_s + SAFETY_MARGIN_S
+        self.last_packet_frames as f64 / self.rate() + self.device_lead_s + SAFETY_MARGIN_S
     }
 
     /// Sets how far the output device pulls ahead of its playout (s); see
@@ -287,6 +292,16 @@ impl JitterBuffer {
     pub fn set_limits(&mut self, min_target_s: f64, max_target_s: f64) {
         self.min_target_s = min_target_s;
         self.max_target_s = max_target_s.max(min_target_s);
+    }
+
+    /// Instantaneous depth to (re)start or trim to: the target plus the
+    /// device's lead. The target is a time average against the device's
+    /// playout line; right before the device pulls its next period or
+    /// burst the buffer holds about this much, and right after it about
+    /// target − lead. Starting at the bare target would let a device that
+    /// pulls 10 ms at once empty a 6.5 ms buffer on its first pull.
+    pub fn fill_frames(&self) -> u64 {
+        ((self.target_s() + self.device_lead_s) * self.rate()).round() as u64
     }
 
     pub fn target_frames(&self) -> u64 {
@@ -411,7 +426,7 @@ impl JitterBuffer {
         let ch = fmt.channels;
         if self.state == State::Priming {
             let depth = self.depth_frames();
-            let target = self.target_frames();
+            let target = self.fill_frames();
             if depth >= target.max(1) {
                 // Start with exactly `target` buffered so latency starts low.
                 self.skip_to(self.write_end - target);
@@ -494,7 +509,7 @@ impl JitterBuffer {
         if overfull && self.gain == 0.0 {
             // Faded out: skip ahead to the target depth, then fade back in.
             let before = self.read_pos;
-            self.skip_to(self.write_end.saturating_sub(self.target_frames()));
+            self.skip_to(self.write_end.saturating_sub(self.fill_frames()));
             self.counters.trims += 1;
             self.counters.trimmed_frames += self.read_pos - before;
             self.step = Step::None;
@@ -503,7 +518,7 @@ impl JitterBuffer {
                 Step::Skip(n) => {
                     // Keep at least half the target so a skip can never
                     // cause the underrun it is meant to prevent.
-                    let keep = self.target_frames() / 2;
+                    let keep = self.fill_frames() / 2;
                     let to = (self.read_pos + n).min(self.write_end.saturating_sub(keep));
                     let before = self.read_pos;
                     self.skip_to(to);

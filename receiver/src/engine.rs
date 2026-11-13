@@ -135,11 +135,12 @@ pub struct SharedStats {
     pub device_rate_ppb: AtomicI32,
     pub device_lead_us: AtomicU32,
     /// Callback cadence, accumulated by the audio thread and taken (swapped
-    /// to zero) by whoever logs it: count, output frames, sum and max of the
-    /// intervals between callbacks (µs).
+    /// to zero) by whoever logs it: count, output frames, sum (ns, so
+    /// per-callback rounding cannot bias the rate) and max (µs) of the
+    /// intervals between callbacks.
     pub cadence_callbacks: AtomicU64,
     pub cadence_frames: AtomicU64,
-    pub cadence_interval_sum_us: AtomicU64,
+    pub cadence_interval_sum_ns: AtomicU64,
     pub cadence_interval_max_us: AtomicU32,
     /// Audio the output endpoint holds queued after a callback (WASAPI
     /// padding), averaged by the backend; µs at the output rate. Latency
@@ -397,7 +398,7 @@ impl Engine {
             // fell by about the target since the last step. Two in a row
             // teach the loop the rate that keeps causing them.
             self.underruns_seen = underruns;
-            self.drift.stepped(-self.jb.target_s(), now_s);
+            self.drift.underran(self.jb.target_s(), now_s);
         }
         // The anchor for the next interval's arrivals: where the stream read
         // position and the device's output count stand now. Only valid while
@@ -467,8 +468,8 @@ impl Engine {
         let s = &self.stats;
         s.cadence_callbacks.fetch_add(cad.callbacks, Relaxed);
         s.cadence_frames.fetch_add(cad.frames, Relaxed);
-        s.cadence_interval_sum_us
-            .fetch_add((cad.interval_sum_s * 1e6) as u64, Relaxed);
+        s.cadence_interval_sum_ns
+            .fetch_add((cad.interval_sum_s * 1e9).round() as u64, Relaxed);
         s.cadence_interval_max_us
             .fetch_max((cad.interval_max_s * 1e6) as u32, Relaxed);
         s.device_rate_ppb.store(
