@@ -169,7 +169,8 @@ a handoff offer without a signed host (0.1.x Mac) with a failed ack saying
 - **Hello extension** (after the 16-byte body): revision u8 (1), the
   receiver's own IPv4 toward the Mac (4 bytes, 0.0.0.0 = unknown), receiver
   monotonic clock µs (u64, stamped when the hello is built).
-- **Stats extension** (after the 40-byte body, 88 bytes): revision u8 (1),
+- **Stats extension** (after the 40-byte body, 88 bytes): revision u8 (1;
+  2 when the health block follows),
   output mode u8 (0 none, 1 WASAPI exclusive, 2 WASAPI shared via
   IAudioClient3, 3 WASAPI shared default period, 4 cpal, 5 file), stream
   channels u8, output channels u8, then u32 each: target µs, arrival jitter
@@ -179,6 +180,14 @@ a handoff offer without a signed host (0.1.x Mac) with a failed ack saying
   u32; last latency marker played: stream timestamp u64 (0 = none) and the
   receiver-clock µs its first frame was handed to the output device (u64);
   receiver clock µs now (u64); the receiver's own IPv4 (4 bytes).
+- **Stats health block** (protocol revision 2, 0.2.1; 25 bytes after the
+  88-byte extension, present when its revision byte is 2): flags u8 (bit 0
+  an output device is open and rendered in the last second; bit 1 drift
+  loop saturated; bit 2 more than one underrun in the last 10 s; bit 3
+  exclusive mode given up for shared), then u32 each: audio queued in the
+  output endpoint µs, device rate ppb (i32, 0 = unknown), device lead µs,
+  trims, skips, inserts. A Mac shows "PC is not playing" only on an explicit
+  bit 0 = 0 from a revision-2 PC, never from zero counters.
 - **Latency marker** (audio flag bit 1): set by the Mac on one packet a
   second during a latency test. The receiver records when the marked
   packet's first frame comes out of the resampler (read position ≥ marker
@@ -331,7 +340,7 @@ taken) so start-up hellos can find it. The menu bar shows unpaired / searching
   allowed), logged on acquire/release and shown in Stream and Setup.
 - **Version.** `TightwireCore/BuildInfo.swift` holds the version;
   `bundle.sh` stamps the git commit into Info.plist (`TightwireCommit`); the
-  log's start line and Setup › Diagnostics show `Tightwire 0.2.0 (<commit>)`.
+  log's start line and Setup › Diagnostics show `Tightwire 0.2.1 (<commit>)`.
 - **UI (dark-leaning, native controls).** The menu bar item is a native menu
   (`MenuBarExtra` `.menu` style) and nothing else: one status line (not paired
   / paired / looking for / streaming / stopped with the error), Start/Stop
@@ -375,11 +384,20 @@ taken) so start-up hellos can find it. The menu bar shows unpaired / searching
   dropped and counted. On a gap: short fade-out, silence, fade-in (no clicks).
   A changed stream id, format, or discontinuity flag flushes and resyncs.
 - **Drift compensation:** PI controller on smoothed buffer depth drives a
-  resampling ratio within ±1000 ppm. Interpolation quality must keep a 1 kHz
+  resampling ratio within ±1000 ppm around a tracked device rate of up to
+  ±1 % (Deviation 25). Interpolation quality must keep a 1 kHz
   sine's THD+N below −90 dB (verify with a test); windowed-sinc preferred.
 - **Output backends** behind one trait:
-  - `wasapi` (Windows): exclusive mode, event-driven, smallest period the
-    device accepts; automatic fallback to shared mode with a logged warning.
+  - `wasapi` (Windows): shared mode, event-driven; exclusive mode
+    (smallest period the device accepts, automatic fallback to shared with a
+    logged warning) only when asked for (0.2.1, Deviation 24). Shared mode
+    keeps one engine period plus max(period/2, 1 ms) queued (Microsoft:
+    render latency is the write-to-read distance, not the buffer size),
+    growing it when the engine finds the buffer empty, and reports the
+    queued audio. Each open activates a fresh IAudioClient, sets the event
+    handle right after Initialize and times out after 8 s; exclusive passes
+    take the device buffer before rendering and skip an event whose buffer
+    is not free.
     Shared mode asks IAudioClient3::GetSharedModeEnginePeriod for the
     driver's range, logs it, initialises at its minimum and reports the
     period actually in force (GetCurrentSharedModeEnginePeriod; another
@@ -635,9 +653,9 @@ GUI subsystem. Without arguments it is a tray app; with arguments it is the
 CLI (it attaches to the parent console), e.g. `tightwire.exe deck mac` for
 Stream Deck buttons, `tightwire.exe --list-devices`, `tightwire.exe doctor`.
 
-- Tray menu: version and build (`Tightwire 0.2.0 (<commit>)`), status
+- Tray menu: version and build (`Tightwire 0.2.1 (<commit>)`), status
   (unpaired / waiting / streaming + buffer ms), output state, Output device,
-  Exclusive mode (lowest latency), Pair… (code shown in a Yes/No dialog),
+  Exclusive mode (experimental for virtual devices), Pair… (code shown in a Yes/No dialog),
   Stream Deck → Mac / → PC, Start at login (HKCU Run), Open log, Forget
   pairing, Quit. Errors surface as a tray notification and a log line. Log:
   `%LOCALAPPDATA%\Tightwire\tightwire.log`, rotated at 1 MB, 3 kept; every
@@ -653,9 +671,15 @@ Stream Deck buttons, `tightwire.exe --list-devices`, `tightwire.exe doctor`.
   missing, a unique exact-name match is accepted and the id updated (0.1.0's
   name-only file migrates this way); otherwise the tray shows "waiting for
   <name>", keeps the choice and retries every 5 s and after
-  `WM_DEVICECHANGE`. Exclusive mode is a per-device setting, default on for
-  names containing "Elgato Virtual Audio" or "CABLE", off otherwise; a
-  refused exclusive open falls back to shared with a log line. The
+  `WM_DEVICECHANGE`. Exclusive mode is a per-device setting, off unless the
+  user turns it on ("Exclusive mode (experimental for virtual devices)");
+  a refused exclusive open falls back to shared with a log line, and an
+  exclusive stream with 4 underruns in 10 s or a drift loop saturated for
+  10 s is reopened in shared mode with exclusive saved off for that device
+  (notified once, logged, reported to the Mac). Open failures are logged
+  with a plain-words reason and hint, retried every 10 s (logged at most
+  once a minute) and their recovery notified. One tray runs per session
+  (named mutex). The
   stream→device resampling ratio is logged once per format.
 - **Handoff diagnostics.** Deck requests from the tray or CLI are logged as
   requests ("asked the Mac to send devices to this PC") with the Mac's
@@ -696,6 +720,11 @@ Recorded where the build differs from the text above, with the reason.
    sawtooths dip to target − (P+O)/2, so at the bare floor any 0.5 ms hiccup
    the arrival-jitter estimator cannot see (output scheduling, drift-loop lag
    at start-up) underran in loopback. Localhost steady state is ~2.6 ms.
+   Since 0.2.1 the depth is measured against the device's playout line,
+   which reads half a period lower than 0.2.0's measure, and "one output
+   period" becomes the device's measured lead (Deviation 25): half a period
+   for a steady device (the same real depth as before), half a burst for a
+   bursty one; priming and trims fill to target + lead.
 3. **`--no-beacon` (§5).** Removed from the streaming receiver: with §3a it
    never broadcasts outside `tightwire-recv pair` (which has `--no-beacon`).
 4. **Mac SipHash (§3a).** Implemented once in C (`TightwireRT`) and used from
@@ -778,6 +807,31 @@ Recorded where the build differs from the text above, with the reason.
    one underrun (`two_hours_with_a_stall_every_minute…`). The latency test
    recommends a floor when it sees underruns; the estimator was not made
    slower to relax, which would cost latency all the time.
+24. **Exclusive mode opt-in (§10), 0.2.1.** 0.2.0 defaulted to exclusive
+   mode for virtual endpoints by name. In the field one accepted it, then
+   delivered 3 ms buffers in bursts at an off-nominal rate (underruns
+   climbing, correction pinned) while shared mode on the same endpoint was
+   healthy. Exclusive is now opt-in and watched (§10).
+25. **Drift control against real devices (§5), 0.2.1.** Depth is measured
+   against a playout line fitted to the output callbacks (a critically
+   damped 10 rad/s loop, back-to-back callbacks taken as one burst), not
+   "last callback + nominal speed", whose error grew with the callback size
+   and burst length. The floor uses the device's recent lead peak (8 s
+   decay); priming and trims fill to target + lead, the instantaneous depth
+   just before the device's next pull. The PI loop keeps its ±1000 ppm
+   limit; a tracked rate (±1 %) takes over when its integral sits near the
+   limit with a non-shrinking error for 2 s, or when steps or underruns in
+   one direction, 0.5–5 s apart and with the loop pinned that way, imply a
+   rate (three quarters of it is learned per lesson, at most 3000 ppm). Lasting errors beyond
+   max(3 ms, target/4) (excess) or max(2 ms, target/4) (deficit) for 0.25 s
+   are removed by one fade-out/skip-or-silence/fade-in, at most once a
+   second: a ~1.3 ms dip once per disturbance instead of seconds of
+   saturated pitch correction. The overflow trim never sits closer to the
+   target than one packet + twice the lead + 2 ms (0.2.0 trimmed every
+   sawtooth peak once target = cap). A device 5000 ppm fast costs a few
+   underruns while its rate is learned from a cold start (simulated: 4 in
+   the first 3 s). The target may fall at most 0.6 ms/s so
+   the loop can follow a decaying jitter peak without saturating.
 23. **Signing (§10).** Developer ID builds sign every executable,
    including the embedded longcable-server, with the hardened runtime; ad-hoc
    builds (the default for anyone building from source) do not. Both carry

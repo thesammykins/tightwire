@@ -179,7 +179,7 @@ mod tests {
         assert!(h.contains(&format!("Tightwire {VERSION} (")), "{h}");
         assert!(h.contains(COMMIT), "{h}");
         assert!(h.contains("tray start, pid 42"), "{h}");
-        assert_eq!(VERSION, "0.2.0");
+        assert_eq!(VERSION, "0.2.1");
     }
 
     #[test]

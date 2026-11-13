@@ -7,6 +7,66 @@ a version is a point in the source history, and you build it yourself.
 
 ## Unreleased
 
+## 0.2.1
+
+Fixes from the first long session on a real PC. Build both sides from the
+same source: a 0.2.0 Mac and PC still stream together, but the Mac's "PC is
+not playing" warning and receiver health need 0.2.1 on both.
+
+### Fixed
+
+- PC: the drift loop now measures buffer depth against what the output
+  device really played, fitted from its callbacks, instead of assuming one
+  callback per period at nominal speed. Output devices that hand out
+  several buffers at once (common for virtual endpoints in exclusive
+  mode), stall, or run thousands of ppm off nominal no longer cause an
+  underrun storm, a pinned ±1000 ppm correction or a misreported buffer.
+  The buffer floor covers the device's measured bursts.
+- PC: with the buffer target at its cap, every peak of the buffer's
+  sawtooth was faded and skipped (heard as static) and the correction sat
+  at −1000 ppm. The overflow threshold now always stays above the target.
+- PC: large, lasting buffer errors (after a stall, a burst or a jump in the
+  target) are removed in one faded step (at most one a second) instead of
+  seconds of saturated correction; rates beyond ±1000 ppm are tracked up
+  to ±1 % without moving the pitch beyond 1.7 cents.
+- PC: shared mode kept the whole endpoint buffer full, adding latency no
+  stat showed; it now keeps one engine period plus a small margin queued.
+- PC: each output open uses a fresh audio client and releases a failed one
+  at once; errors such as 0x8889000A are explained in plain words with a
+  hint; every retry outcome is logged; an unresponsive driver times out
+  instead of freezing the tray.
+- PC: the tray no longer flips between "searching" and "streaming" on
+  every underrun.
+- PC: a second tray now says Tightwire is already running and exits;
+  "UDP port 4810 in use" says another Tightwire is probably running.
+- Mac: with the Stream Deck unplugged, Stream Deck handoff waits for it to
+  be plugged in (or for Send to PC) instead of retrying every 30 s and
+  toggling the keep-awake assertion.
+
+### Changed
+
+- PC: exclusive mode is off unless you turn it on (tray › Exclusive mode,
+  per output; CLI `--exclusive`), and is described as experimental for
+  virtual devices. If an exclusive stream keeps underrunning or the drift
+  correction stays at its limit for about 10 s, the PC switches that output
+  to shared mode, says so once, logs why and leaves exclusive mode off for
+  it until you turn it on again.
+- Protocol revision 2 (version byte unchanged): the stats extension gains
+  an output health block (output open, saturated, underruns climbing,
+  exclusive fallback, audio queued in the PC's output endpoint, device
+  rate, step and trim counts).
+
+### Added
+
+- Mac: when the PC has no output open, the menu bar icon shows a yellow
+  "!" and the Stream pane says "PC is not playing: choose an output on the
+  PC"; PC health problems are shown in the Stream pane. The latency
+  breakdown includes the PC's output queue as reported by the PC.
+- PC: the 10 s `stats:` log line says what the output device does
+  (callbacks per second, interval mean/max, frames per second against
+  nominal, measured rate, burst lead, queued audio) and counts trims,
+  skips and inserts.
+
 ## 0.2.0
 
 The first public version. Build the Mac app and the PC receiver from the

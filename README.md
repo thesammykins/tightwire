@@ -15,7 +15,7 @@ it.
 
 - **Audio:** 32-bit float PCM over UDP, 1 ms packets, an adaptive jitter
   buffer and continuous clock-drift resampling on the PC, WASAPI output
-  (exclusive mode where the device allows it). Mono or stereo.
+  (shared mode; exclusive mode optional). Mono or stereo.
 - **Pairing:** a one-time six-digit code confirmed on both screens; after
   that every packet is authenticated, and the Mac only sends while the
   paired PC proves it is listening.
@@ -152,9 +152,13 @@ and on the Mac pick the input and channel in **Stream** and press **Start**.
   two or more channels is sent as stereo (all channels) unless you pick one
   mono channel; the choice is kept per device.
 - **Menu bar icon:** a plain waveform when idle, a hollow ring while looking
-  for the PC, a red dot while the PC is receiving, an orange "!" on an error.
+  for the PC, a red dot while the PC is receiving, a yellow "!" when the PC
+  receives but has no output open ("PC is not playing: choose an output on
+  the PC"), an orange "!" on an error.
 - **Stream pane:** the PC's buffer depth, drift, loss, the input level and a
-  latency breakdown ([Latency](#latency)).
+  latency breakdown ([Latency](#latency)), plus a warning when the PC's
+  output is not keeping time (drift correction at its limit, underruns
+  climbing, or exclusive mode given up).
 - **Sleep:** while streaming, or while a Stream Deck is on the PC, the Mac
   does not idle-sleep (the display still does). `pmset -g assertions` lists
   it as "Tightwire: streaming to …".
@@ -174,13 +178,25 @@ into it is what Windows apps hear as the microphone.
   **CABLE Output** as the microphone in your apps. Expect a few ms more
   latency from the cable driver.
 
-**Exclusive mode** (tray menu, per device) gives the lowest latency and keeps
-other apps from playing into the endpoint; it is on by default for "Elgato
-Virtual Audio" and "CABLE" endpoints. If an endpoint refuses it, Tightwire
-falls back to shared mode at the smallest period the driver offers and logs
-the driver's range. That can be much larger: Elgato Virtual Audio offers no
-shared-mode period below 10 ms, and only exclusive mode reaches its 3 ms
-minimum. Any sample rate works (the stream is resampled).
+**Shared mode** is the default: Tightwire asks for the smallest period the
+driver offers (and logs the driver's range) and keeps only about one period
+queued in the endpoint. Some drivers offer nothing shorter than 10 ms in
+shared mode (Elgato Virtual Audio among them).
+
+**Exclusive mode** (tray menu › Exclusive mode, per device; off unless you
+turn it on) can reach the driver's shortest period and keeps other apps from
+playing into the endpoint. It is **experimental for virtual devices**: one
+virtual endpoint accepted it and then delivered its buffers in bursts at an
+off-nominal rate, while shared mode on the same endpoint was fine. If an
+exclusive stream keeps underrunning, or the drift correction stays at its
+limit, for about 10 s, Tightwire reopens the endpoint in shared mode, shows
+a notification, logs why, and leaves exclusive mode off for that endpoint
+until you turn it on again. An endpoint that refuses exclusive mode is used
+in shared mode with a log line. Any sample rate works (the stream is
+resampled).
+
+Only one Tightwire tray runs per Windows session; starting it again says it
+is already running.
 
 ## Stream Deck handoff
 
@@ -219,7 +235,8 @@ Mac menu › **Open Log** (`~/Library/Logs/Tightwire/tightwire.log`); PC tray �
 `Tightwire 0.2.0 (abc1234567)`, which the tray menu's first line and the
 Mac's Setup › Diagnostics also show. While streaming, each side writes one
 stats line every 10 s (buffer, target, jitter, loss, underruns, drift and,
-on the Mac, round trip), so a long session can be read back afterwards.
+on the Mac, round trip; on the PC also what the output device does), so a
+long session can be read back afterwards.
 
 `tightwire.exe doctor` on the PC checks pairing, the chosen output, the
 firewall rule, usbip-win2 and the TCP path to the Mac.
@@ -230,8 +247,9 @@ The design budget on a wired LAN at 48 kHz is about **6–9 ms** from the Mac's
 input to the PC's output device: about 1 ms of capture buffer, under 0.5 ms
 of network, a jitter buffer of a few ms and about 3 ms of WASAPI
 exclusive-mode period. Shared mode (10 ms or more on Elgato Virtual Audio),
-VB-Cable and Wave Link add their own latency on top, which Tightwire cannot
-see or control. On Wi-Fi, use larger packets (128–256 frames in the Stream
+VB-Cable and Wave Link add their own latency on top; of that, Tightwire sees
+only what is queued in the PC's output endpoint, which the PC reports and
+the Stream pane lists as "PC output queue". On Wi-Fi, use larger packets (128–256 frames in the Stream
 pane) and expect a deeper buffer.
 
 While streaming, the Stream pane lists where the time goes and labels each
@@ -258,11 +276,16 @@ exists yet.**
 
 The Mac's and the PC's audio clocks never run at exactly the same speed
 (typically tens of ppm apart, a few milliseconds per minute). The PC does not
-drop or repeat samples: it nudges its resampling ratio (by at most ±0.1 %) so
-its buffer stays at the target. That is an inaudible pitch change of well
-under a cent; the `drift` figure in the Stream pane and both logs is the
-correction in ppm. Apps on the PC see a continuous stream at the output
-device's own rate, with no gaps, clicks or slow latency creep.
+drop or repeat samples: it nudges its resampling ratio so its buffer stays at
+the target, by at most ±0.1 % (1.7 cents) beyond the output device's own
+measured rate, which it follows up to ±1 % (some virtual devices run several
+thousand ppm off nominal; following them keeps the pitch right). The `drift`
+figure in the Stream pane and both logs is the correction in ppm. Apps on
+the PC see a continuous stream at the output device's own rate, with no
+gaps, clicks or slow latency creep. After a disturbance that leaves the
+buffer far from its target (an output stall, a burst of late packets), the
+PC fades out, skips or inserts the difference once, and fades back in: a
+dip of about a millisecond instead of seconds of extra latency.
 
 ## Security model
 

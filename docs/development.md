@@ -96,7 +96,8 @@ to busy Wi-Fi). The buffer is adaptive (one packet + one device period +
 0.5 ms, plus measured jitter), capped at 20 ms. The latency test's **Apply**
 sends a floor and cap to the PC (type 21), saved in `tuning.conf`;
 `--target-ms` (floor) and `--max-ms` (cap) on the command line win over
-`tuning.conf`. `--shared` skips exclusive mode.
+`tuning.conf`. WASAPI uses shared mode unless `--exclusive` is given
+(`--shared`, the default since 0.2.1, is still accepted).
 
 `--list-devices` and `doctor` label the WASAPI periods separately: "shared
 default period" and "exclusive min period" come from
@@ -104,7 +105,7 @@ default period" and "exclusive min period" come from
 `IAudioClient3`. Elgato Virtual Audio reports a 480-frame (10 ms) shared
 minimum, equal to its default, so only exclusive mode reaches its 3 ms
 minimum. `doctor` also says whether a device's exclusive preference is the
-name default or was saved by the tray toggle.
+default (off) or was saved by the tray toggle or its watchdog.
 
 ## Files
 
@@ -160,11 +161,46 @@ machines is not a measurement.
 
 `receiver/tests/core.rs` runs two hours of stream time on a virtual clock at
 +100 and −100 ppm with 0–0.5 ms random network delay into a 10 ms-period
-device: the buffer holds at 11.95–12.07 ms (target 12.0–12.5 ms) with zero
-underruns, and the correction settles at ±100.0 ppm. Same file: an isolated
-3 ms stall after a quiet minute can cause one underrun, because the adaptive
-margin has relaxed by then (SPEC.md Deviation 22); the latency test
+device: the buffer holds at 6.96–7.10 ms with zero underruns, and the
+correction settles at ±100.0 ppm. (0.2.0 reported 11.95–12.07 ms for the same
+real depth: its measure read half a 10 ms period high; 0.2.1 measures
+against the device's playout line.) Same file: an isolated
+3 ms stall after a quiet minute can cause one underrun (48 for 120 stalls in
+the current run), because the adaptive margin has relaxed by then (SPEC.md Deviation 22); the latency test
 recommends a floor when it sees that.
+
+## Simulated output devices
+
+`receiver/tests/device.rs` drives the engine with a simulated output device
+on a virtual clock (`receiver/tests/support/simdev.rs`): callbacks in
+bursts from a coarse timer, stalls with or without catching up, a real rate
+up to ±5000 ppm off nominal and jittered callback times, fed by a sender
+with its own crystal and network holds. Every profile must keep the
+reported depth within 2 ms of the real time-averaged depth, never leave
+the drift loop saturated for more than 3 s, return to target within about
+2 s of a disturbance, stop underrunning once the device's pattern is known,
+and leave lost/late at 0. `field_b_*` and `field_c_*` reproduce the two
+field reports; against 0.2.0's engine they fail (≈90 underruns a second;
+≈20 trims a second with the correction pinned at −1000 ppm).
+
+## Reading the PC's stats line (0.2.1)
+
+```
+stats: buffer … target … | device: 333 callbacks/s interval 3.00/3.40 ms mean/max, -2000 ppm frames/s vs nominal (rate -2000 ppm), lead 1.50 ms, queued 3.00 ms | trims 0 skips 0 inserts 0 | endpoint starved 0 skipped events 0
+```
+
+- `interval mean/max` and `callbacks/s`: a steady device calls back once per
+  period. A max several times the mean, or a lead well above half a period,
+  means bursts (the floor grows to cover them).
+- `frames/s vs nominal` and `rate`: how far the device's clock is from
+  nominal on this PC's clock; up to ±1 % is followed.
+- `queued`: audio waiting in the endpoint (shared mode about 1.5 periods).
+- `skips`/`inserts`: one-off faded corrections; a few after a disturbance
+  are expected, a steady climb is not. `endpoint starved` counts shared-mode
+  passes where the engine found nothing queued.
+- `drift loop saturated` at the end of the line, or underruns climbing, in
+  exclusive mode trigger the fallback to shared mode
+  (`exclusive-mode watchdog: …` in the log).
 
 ## Reading the handoff logs
 
@@ -191,6 +227,12 @@ First real handoff checklist:
 
 ## What is untested
 
+- Everything Windows-side that is new in 0.2.1 is compiled and linted
+  only: the WASAPI changes (shared-mode padding target, exclusive event
+  skipping, event handle set at Initialize, open time-out, HRESULT texts),
+  the exclusive-mode watchdog wiring in the tray, the endpoint-list time-out
+  and the single-instance mutex. The engine changes behind them are
+  unit-tested with simulated devices.
 - Everything Windows-side that is new in 0.2.0 is compiled, linted and
   unit-tested only: shared-mode period logging, DPAPI key storage, the
   WSAEMSGSIZE handling, the firewall profile change, the stats extension and

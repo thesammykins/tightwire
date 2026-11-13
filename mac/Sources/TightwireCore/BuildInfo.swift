@@ -6,7 +6,7 @@ import Foundation
 /// app's Info.plist (`TightwireCommit`); SwiftPM builds outside the bundle
 /// (tests, `swift run`, the CLI) report "dev".
 public enum BuildInfo {
-    public static let version = "0.2.0"
+    public static let version = "0.2.1"
 
     public static var commit: String {
         (Bundle.main.object(forInfoDictionaryKey: "TightwireCommit") as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "dev"
