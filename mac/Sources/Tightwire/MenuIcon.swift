@@ -18,7 +18,19 @@ enum MenuIcon {
 
     static let size = NSSize(width: 20, height: 16)
 
-    static func image(_ state: State) -> NSImage {
+    /// One image per state, kept for the life of the app: the status item
+    /// redraws whenever it is handed a different NSImage object, and the
+    /// label is re-evaluated far more often than the state changes.
+    @MainActor private static var cache: [State: NSImage] = [:]
+
+    @MainActor static func image(_ state: State) -> NSImage {
+        if let hit = cache[state] { return hit }
+        let img = draw(state)
+        cache[state] = img
+        return img
+    }
+
+    private static func draw(_ state: State) -> NSImage {
         switch state {
         case .code:
             return symbol("number.circle", template: true)

@@ -243,7 +243,7 @@ private struct StreamPane: View {
 
     @ViewBuilder var levelSection: some View {
         Section("Level") {
-            LevelMeter(level: model.level, active: model.isRunning)
+            LevelRow(model: model)
         }
 
     }
@@ -440,6 +440,16 @@ private struct LatencySection: View {
         case .rejected(let m): "PC refused: \(m)"
         case .noAnswer: "No answer from the PC (it needs Tightwire 0.2.0)"
         }
+    }
+}
+
+/// Reads `model.level` in its own body, so the meter's 10 Hz updates
+/// re-evaluate this row and not the whole Stream pane.
+struct LevelRow: View {
+    let model: AppModel
+
+    var body: some View {
+        LevelMeter(level: model.level, active: model.isRunning)
     }
 }
 

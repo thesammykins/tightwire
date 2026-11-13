@@ -403,6 +403,7 @@ final class AppModel {
     /// Packet size to switch to once the receiver acknowledged its limits.
     @ObservationIgnored private var pendingPacketSize: Int?
     @ObservationIgnored private var lastSummary = Date.distantPast
+    @ObservationIgnored private var ticksSincePublish = 0
     @ObservationIgnored private var lastOutputWarning: String?
     @ObservationIgnored private var lastHealthNote: String?
 
@@ -421,9 +422,22 @@ final class AppModel {
     private func tick() {
         guard let s = session else { return }
         let st = s.status
-        sessionStatus = st
-        stats = st.stats
-        testProgress = st.testProgress
+        // Observation invalidates every view that read a property each time
+        // it is assigned, changed or not. The numbers below arrive faster
+        // than anyone can read them and feed most of the window and the menu
+        // bar icon, so they are published twice a second (at once when the
+        // stream changes state); only the level meter moves at the timer's
+        // 10 Hz, and it lives in its own small view.
+        let next: Phase = st.phase == .streaming ? .streaming : .searching
+        ticksSincePublish += 1
+        if ticksSincePublish >= 5 || next != phase || sessionStatus == nil {
+            ticksSincePublish = 0
+            sessionStatus = st
+            if stats != st.stats { stats = st.stats }
+            let fresh = st.stats != nil && (st.statsAge ?? 99) < 3
+            if statsFresh != fresh { statsFresh = fresh }
+        }
+        if testProgress != st.testProgress { testProgress = st.testProgress }
         if let r = st.testResult, r != testResult {
             testResult = r
             log("latency", r.logLine)
@@ -444,11 +458,12 @@ final class AppModel {
             lastSummary = Date()
             log("stats", Self.summaryLine(st))
         }
-        statsFresh = st.stats != nil && (st.statsAge ?? 99) < 3
         logHealthChanges()
-        // Peak-hold meter with ~300 ms release.
-        level = max(st.peak, level * 0.7)
-        let next: Phase = st.phase == .streaming ? .streaming : .searching
+        // Peak-hold meter with ~300 ms release; silence settles at zero
+        // instead of decaying forever.
+        let held = max(st.peak, level * 0.7)
+        let newLevel: Float = held < 1e-5 ? 0 : held
+        if newLevel != level { level = newLevel }
         if next != phase {
             log("stream", next == .streaming ? "\(peerName) is listening; sending audio" : "\(peerName) stopped answering; audio gated, probing")
             phase = next
