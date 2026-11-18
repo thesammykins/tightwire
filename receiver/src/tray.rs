@@ -847,8 +847,15 @@ fn command(app: &mut App, id: usize) {
             }
         }
         ID_QUIT => {
-            // SAFETY: ends the message loop.
-            unsafe { DestroyWindow(app.hwnd).ok() };
+            // Posted, not DestroyWindow here: this runs with APP borrowed, and
+            // DestroyWindow sends WM_DESTROY synchronously, where APP cannot
+            // be borrowed, so the receiver would never be stopped. WM_CLOSE
+            // arrives after this handler returns; DefWindowProc then destroys
+            // the window and WM_DESTROY runs the shutdown.
+            // SAFETY: posting to our own live window.
+            unsafe {
+                let _ = PostMessageW(Some(app.hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+            }
         }
         ID_EXCLUSIVE => {
             if let Some(o) = app.settings.output.clone() {
