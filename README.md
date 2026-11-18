@@ -90,7 +90,10 @@ instead, and those prompts stay away across rebuilds.
 ### PC
 
 Pick one of two ways to get `Tightwire-Windows`, the folder with
-`tightwire.exe` and its installer.
+`tightwire.exe` and its installer. (Each CI run on GitHub also keeps the
+tested Windows build for 30 days: open the run under **Actions** and
+download `Tightwire-Windows-<commit>` from its summary page. It is unsigned,
+the same as a build of your own.)
 
 **A. Cross-build on the Mac** (nothing to install on the PC). In the
 `tightwire` folder from above:

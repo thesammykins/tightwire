@@ -135,3 +135,13 @@ jobs:
           mise exec rust -- cargo clippy --release --locked --manifest-path receiver/Cargo.toml --all-targets -- -D warnings
       - name: CLI smoke test (no audio hardware on the runner)
         run: ./scripts/windows-smoke.ps1 -Exe dist/Tightwire-Windows/tightwire.exe
+      # The tested MSVC build, laid out like Tightwire-Windows.zip: download
+      # it from the run's summary page and run "Install Tightwire.cmd". Not a
+      # release: unsigned, and kept only as long as the retention below.
+      - name: Upload the Windows build
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Tightwire-Windows-${{ github.sha }}
+          path: dist/Tightwire-Windows/
+          if-no-files-found: error
+          retention-days: 30
