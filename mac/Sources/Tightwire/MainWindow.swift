@@ -512,6 +512,18 @@ private struct ReceiverPane: View {
                     LabeledContent("Last address", value: p.lastAddress ?? p.hostName ?? "Not seen yet")
                     TextField("Address override", text: $model.addressOverride, prompt: Text("Automatic"))
                         .disabled(model.isRunning)
+                    Picker("Network", selection: $model.networkInterface) {
+                        Text("Automatic").tag("")
+                        ForEach(model.interfaces) { i in
+                            Text("\(i.displayName) (\(i.name)) · \(i.subnets.map(\.addressText).joined(separator: ", "))").tag(i.name)
+                        }
+                        // Keep a chosen but unplugged interface selectable instead of blanking the picker.
+                        if !model.networkInterface.isEmpty, !model.interfaces.contains(where: { $0.name == model.networkInterface }) {
+                            Text("\(model.networkInterface) (not connected)").tag(model.networkInterface)
+                        }
+                    }
+                    .disabled(model.isRunning)
+                    .onAppear { model.refreshInterfaces() }
                     HStack {
                         Button("Pair Another PC…") { model.beginPairing() }
                             .disabled(model.isRunning || model.flow != .none)

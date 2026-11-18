@@ -7,6 +7,20 @@ a version is a point in the source history, and you build it yourself.
 
 ## Unreleased
 
+### Added
+
+- Mac: **Receiver › Network** pins the stream to one interface, for a PC
+  reachable over both the LAN and a direct cable. Tightwire then streams to
+  the PC's address on that link (stored address, else `<name>.local`) and
+  never falls back to another route. CLI: `--interface NAME` and
+  `--list-interfaces`.
+
+### Fixed
+
+- PC: tray **Quit** now stops the receiver and exits. It used to remove the
+  window only, leaving a hidden process that held UDP 4810 and made every
+  restart report "Tightwire is already running".
+
 ## 0.2.1
 
 Fixes from the first long session on a real PC. Build both sides from the

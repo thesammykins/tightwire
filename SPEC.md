@@ -296,6 +296,13 @@ when an authenticated, fresh hello or stats carries the receiver's own IPv4
 equal to the datagram's source. When gated it may try the PC's name
 (`<name>.local`) for up to 3 s, adopting it only on such a verified hello.
 
+**Network interface (Mac).** The user may pin the stream to one interface
+(BSD name; CLI `--interface`). The socket is then bound to it
+(`IP_BOUND_IF`), so it never leaves by another route, and only addresses on
+that interface's IPv4 networks are used: the address override if set, else
+the stored address, else the first on-link answer for the PC's name. With no
+on-link address, starting fails with a message naming the interface.
+
 **Liveness gating (sender).** The sender is *live* while it holds fresh
 authenticated evidence from the paired receiver less than 3 s old: a hello
 echoing one of its probe nonces, or a stats packet whose sequence echo is
@@ -368,7 +375,7 @@ taken) so start-up hellos can find it. The menu bar shows unpaired / searching
   minimum and a large size from a model with no side effects.
 - `LSUIElement`, `NSMicrophoneUsageDescription`, ad-hoc signed bundle.
 - `tightwire-send` CLI shares TightwireCore: `--list-devices`, `--device`,
-  `--to host:port`, `--frames N`, and `--sine 440 --duration S` (synthetic
+  `--to host:port`, `--interface NAME`, `--frames N`, and `--sine 440 --duration S` (synthetic
   source paced by a real-time clock, needs no mic permission — used for tests),
   plus `pair`, `forget` and `--psk-hex` (§3a).
 

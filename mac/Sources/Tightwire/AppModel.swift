@@ -89,6 +89,9 @@ final class AppModel {
     }
     var framesPerPacket: Int { didSet { defaults?.set(framesPerPacket, forKey: "framesPerPacket") } }
     var addressOverride: String { didSet { defaults?.set(addressOverride, forKey: "addressOverride") } }
+    /// BSD name of the interface the stream must use (a direct cable to the
+    /// PC, say); empty lets macOS route it.
+    var networkInterface: String { didSet { defaults?.set(networkInterface, forKey: "networkInterface") } }
     var handoffDevices: [HandoffDevice] {
         didSet {
             defaults?.set(try? JSONEncoder().encode(handoffDevices), forKey: "handoffDevices")
@@ -105,6 +108,7 @@ final class AppModel {
 
     // Display state (set directly by the snapshot harness).
     var devices: [InputDevice] = []
+    var interfaces: [NetworkInterface] = []
     var pairing: Pairing?
     var phase: Phase = .unpaired
     var level: Float = 0
@@ -174,6 +178,7 @@ final class AppModel {
         allowURLTriggers = defaults?.bool(forKey: "allowURLTriggers") ?? false
         framesPerPacket = defaults?.object(forKey: "framesPerPacket") as? Int ?? 48
         addressOverride = defaults?.string(forKey: "addressOverride") ?? ""
+        networkInterface = defaults?.string(forKey: "networkInterface") ?? ""
         handoffDevices = defaults?.data(forKey: "handoffDevices").flatMap { try? JSONDecoder().decode([HandoffDevice].self, from: $0) } ?? []
         helperBundleID = defaults?.string(forKey: "helperBundleID") ?? HandoffSequencer.defaultHelperBundleID
         addedBusIDs = defaults?.stringArray(forKey: "longcableAddedBusIDs") ?? []
@@ -288,6 +293,11 @@ final class AppModel {
         channelRevision += 1
     }
 
+    func refreshInterfaces() {
+        guard live else { return }
+        interfaces = NetworkInterfaces.list()
+    }
+
     /// The PC runs Tightwire before 0.2.0 (no revision in its hello).
     var receiverOutdated: Bool { sessionStatus?.receiverRevision == 0 || handoffState.receiverRevision == 0 }
 
@@ -326,7 +336,7 @@ final class AppModel {
         guard let pairing else { phase = .unpaired; return }
         guard let device = selectedDevice else { fail("No input device"); return }
         lastError = nil
-        log("stream", "start requested: \(device.name), \(channel == Self.allChannels ? "all channels" : "mono ch \(channel + 1)"), \(framesPerPacket) frames, to \(addressOverride.isEmpty ? pairing.lastAddress ?? pairing.hostName ?? "?" : addressOverride)")
+        log("stream", "start requested: \(device.name), \(channel == Self.allChannels ? "all channels" : "mono ch \(channel + 1)"), \(framesPerPacket) frames, to \(addressOverride.isEmpty ? pairing.lastAddress ?? pairing.hostName ?? "?" : addressOverride)\(networkInterface.isEmpty ? "" : " via \(networkInterface)")")
         Task {
             // Ask before touching the HAL so the prompt is ours, not a silent failure.
             guard await AVCaptureDevice.requestAccess(for: .audio) else {
@@ -341,7 +351,8 @@ final class AppModel {
                     pairing: pairing,
                     address: addressOverride.isEmpty ? nil : addressOverride,
                     framesPerPacket: UInt32(framesPerPacket),
-                    channels: channel == Self.allChannels ? .all : .mono(channel))
+                    channels: channel == Self.allChannels ? .all : .mono(channel),
+                    interface: networkInterface.isEmpty ? nil : networkInterface)
                 session = try Session(config: cfg, source: capture)
                 phase = .searching
                 updateKeepAwake()

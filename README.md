@@ -163,6 +163,17 @@ and on the Mac pick the input and channel in **Stream** and press **Start**.
   does not idle-sleep (the display still does). `pmset -g assertions` lists
   it as "Tightwire: streaming to …".
 
+### Direct cable
+
+If the Mac and PC also share a direct Ethernet cable, choose it under
+**Receiver › Network** (for example "Ethernet (en0)"). Tightwire then
+streams only over that cable, to the PC's address on it: the last address
+if it is on that link, otherwise whatever `<PC name>.local` answers there.
+If the PC cannot be found that way, put its cable address in **Address
+override**. Windows usually calls a cable with no router an unidentified
+Public network, which the Tightwire firewall rule does not cover: set it
+to Private (Settings › Network › that adapter).
+
 ## Choosing the PC's output
 
 Tightwire plays into **the one output endpoint you choose** and never into

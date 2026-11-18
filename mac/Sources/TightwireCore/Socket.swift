@@ -47,6 +47,13 @@ public struct Endpoint: Equatable, Hashable, Sendable, CustomStringConvertible {
 
     /// Resolves "host" or "host:port" (blocking; may hit DNS/mDNS). IPv4 preferred.
     public static func resolve(_ text: String, defaultPort: UInt16) throws -> Endpoint {
+        // resolveAll never returns an empty list.
+        try resolveAll(text, defaultPort: defaultPort)[0]
+    }
+
+    /// Every address "host" or "host:port" resolves to, IPv4 first. A PC on
+    /// two networks (a LAN and a direct cable) can answer with both.
+    public static func resolveAll(_ text: String, defaultPort: UInt16) throws -> [Endpoint] {
         var host = text.trimmingCharacters(in: .whitespaces)
         var port = defaultPort
         if host.hasPrefix("["), let close = host.firstIndex(of: "]") {
@@ -62,19 +69,27 @@ public struct Endpoint: Equatable, Hashable, Sendable, CustomStringConvertible {
                              ai_protocol: IPPROTO_UDP, ai_addrlen: 0, ai_canonname: nil, ai_addr: nil, ai_next: nil)
         var res: UnsafeMutablePointer<addrinfo>?
         let rc = getaddrinfo(host, String(port), &hints, &res)
-        guard rc == 0, let first = res else {
+        guard rc == 0, res != nil else {
             throw SocketError("cannot resolve \(host): \(String(cString: gai_strerror(rc)))", 0)
         }
         defer { freeaddrinfo(res) }
-        var pick = first
-        var p: UnsafeMutablePointer<addrinfo>? = first
+        var found: [Endpoint] = []
+        var p = res
         while let a = p {
-            if a.pointee.ai_family == AF_INET { pick = a; break }
+            var ss = sockaddr_storage()
+            memcpy(&ss, a.pointee.ai_addr, Int(a.pointee.ai_addrlen))
+            let e = Endpoint(storage: ss)
+            if !found.contains(e) { found.append(e) }
             p = a.pointee.ai_next
         }
-        var ss = sockaddr_storage()
-        memcpy(&ss, pick.pointee.ai_addr, Int(pick.pointee.ai_addrlen))
-        return Endpoint(storage: ss)
+        let v4 = found.filter { $0.family == AF_INET }
+        return v4 + found.filter { $0.family != AF_INET }
+    }
+
+    /// The IPv4 address in host byte order; nil for IPv6.
+    public var ipv4: UInt32? {
+        guard family == AF_INET else { return nil }
+        return withUnsafeBytes(of: storage) { $0.load(as: sockaddr_in.self) }.sin_addr.s_addr.bigEndian
     }
 
     var family: Int32 { Int32(storage.ss_family) }
@@ -170,6 +185,17 @@ public final class UDPSocket: @unchecked Sendable {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(fd, $0, to.length) }
         }
         guard rc == 0 else { throw SocketError("connect \(to)") }
+    }
+
+    /// Sends and receives only through the named interface (IP_BOUND_IF), so
+    /// the stream cannot silently take another route to the PC.
+    public func bind(toInterface name: String, family: Int32) throws {
+        var index = if_nametoindex(name)
+        guard index != 0 else { throw SocketError("network interface \(name)", ENXIO) }
+        let rc = family == AF_INET6
+            ? setsockopt(fd, IPPROTO_IPV6, IPV6_BOUND_IF, &index, socklen_t(MemoryLayout<UInt32>.size))
+            : setsockopt(fd, IPPROTO_IP, IP_BOUND_IF, &index, socklen_t(MemoryLayout<UInt32>.size))
+        guard rc == 0 else { throw SocketError("bind to \(name)") }
     }
 
     @discardableResult

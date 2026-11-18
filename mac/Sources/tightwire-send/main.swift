@@ -7,6 +7,7 @@ let usage = """
 usage:
   tightwire-send [options]              stream to the paired receiver
   tightwire-send --list-devices
+  tightwire-send --list-interfaces
   tightwire-send pair --to HOST:PORT [--name NAME]
   tightwire-send forget
   tightwire-send handoff-check --device VID:PID --client-ip IP [--hold S]
@@ -27,6 +28,8 @@ options:
   --keep-awake          hold the same no-idle-sleep assertion as the app while streaming
   --duration S          stop after S seconds
   --to HOST:PORT        receiver address (default: from the pairing)
+  --interface NAME      send only through this network interface (BSD name, e.g. en0;
+                        see --list-interfaces), using the receiver's address on that link
   --psk-hex HEX         TEST ONLY: 32-byte root key instead of a stored pairing
                         (visible to anyone who can list processes)
   --pairing-file PATH   pairing store (default ~/Library/Application Support/Tightwire/cli-pairing.json)
@@ -112,6 +115,13 @@ if flag("--list-devices") {
     exit(0)
 }
 
+if flag("--list-interfaces") {
+    for i in NetworkInterfaces.list() {
+        print("\(i.name)  \(i.displayName)  \(i.subnets.map(\.addressText).joined(separator: ", "))")
+    }
+    exit(0)
+}
+
 let frames = UInt32(take("--frames") ?? "48") ?? 48
 let duration = take("--duration").flatMap(Double.init)
 let sine = take("--sine").flatMap(Double.init)
@@ -122,6 +132,7 @@ let tuningArg = take("--apply-tuning")
 let keepAwake = flag("--keep-awake")
 let deviceQuery = take("--device")
 let to = take("--to")
+let interface = take("--interface")
 let psk = take("--psk-hex")
 let channelArg = take("--channel").flatMap(Int.init)
 let allChannels = flag("--all-channels")
@@ -161,7 +172,8 @@ let selection: ChannelSelection = allChannels ? .all
 
 let session: Session
 do {
-    session = try Session(config: SessionConfig(pairing: pairing, address: to, framesPerPacket: frames, channels: selection),
+    session = try Session(config: SessionConfig(pairing: pairing, address: to, framesPerPacket: frames, channels: selection,
+                                                interface: interface),
                           source: source)
 } catch { fail("\(error)") }
 

@@ -35,12 +35,17 @@ public struct SessionConfig: Sendable {
     public var address: String?
     public var framesPerPacket: UInt32
     public var channels: ChannelSelection
+    /// BSD name of the only interface the stream may use ("en0"); nil lets
+    /// the routing table choose.
+    public var interface: String?
 
-    public init(pairing: Pairing, address: String? = nil, framesPerPacket: UInt32 = 48, channels: ChannelSelection = .mono(0)) {
+    public init(pairing: Pairing, address: String? = nil, framesPerPacket: UInt32 = 48, channels: ChannelSelection = .mono(0),
+                interface: String? = nil) {
         self.pairing = pairing
         self.address = address
         self.framesPerPacket = framesPerPacket
         self.channels = channels
+        self.interface = interface
     }
 }
 
@@ -89,6 +94,8 @@ public final class Session: @unchecked Sendable {
     public let config: SessionConfig
     private let source: AudioSource
     private let socket: UDPSocket
+    /// The interface the socket is bound to, when the user chose one.
+    private let link: NetworkInterface?
     private let sender: OpaquePointer
     private let keys: SessionKeys
     private let wireChannels: Int
@@ -119,8 +126,16 @@ public final class Session: @unchecked Sendable {
         guard let code = Wire.sampleRates.firstIndex(of: source.sampleRate) else {
             throw StoreError(description: "unsupported sample rate \(source.sampleRate) Hz (need 44.1/48/88.2/96 kHz)")
         }
-        let target = try Session.resolveTarget(config)
+        let link = try config.interface.map { name in
+            guard let i = NetworkInterfaces.find(name) else {
+                throw StoreError(description: "network interface \(name) is not connected (no IPv4 address)")
+            }
+            return i
+        }
+        self.link = link
+        let target = try Session.resolveTarget(config, on: link)
         socket = try UDPSocket(family: target.family, preferredPort: Wire.senderPort)
+        if let link { try socket.bind(toInterface: link.name, family: target.family) }
         try socket.connect(target)
         var c = tw_sender_config()
         c.fd = socket.fd
@@ -161,17 +176,34 @@ public final class Session: @unchecked Sendable {
         t.start()
     }
 
-    static func resolveTarget(_ config: SessionConfig) throws -> Endpoint {
-        if let a = config.address ?? config.pairing.lastAddress {
-            return try Endpoint.resolve(a, defaultPort: Wire.defaultPort)
+    /// The override wins; otherwise the stored address, unless a chosen
+    /// interface needs the PC's address on that link instead (a PC on both a
+    /// LAN and a direct cable has one address on each).
+    static func resolveTarget(_ config: SessionConfig, on link: NetworkInterface? = nil) throws -> Endpoint {
+        if let a = config.address { return try Endpoint.resolve(a, defaultPort: Wire.defaultPort) }
+        let stored = try config.pairing.lastAddress.map { try Endpoint.resolve($0, defaultPort: Wire.defaultPort) }
+        if let link, let stored, !link.isOnLink(stored) {
+            if let h = config.pairing.hostName, let e = try? resolveHost(h, on: link) { return e }
+            throw StoreError(description: "no address for \(config.pairing.peerName) on \(link.displayName) (\(link.name)). "
+                + "Check the PC is on and connected there, or enter its address on that link as the address override")
         }
-        if let h = config.pairing.hostName { return try resolveHost(h) }
+        if let stored { return stored }
+        if let h = config.pairing.hostName { return try resolveHost(h, on: link) }
         throw StoreError(description: "no address for \(config.pairing.peerName)")
     }
 
-    static func resolveHost(_ name: String) throws -> Endpoint {
-        do { return try Endpoint.resolve("\(name).local", defaultPort: Wire.defaultPort) } catch {}
-        return try Endpoint.resolve(name, defaultPort: Wire.defaultPort)
+    /// `<name>.local`, then `<name>`. With `link`, only an address on that
+    /// link's networks counts.
+    static func resolveHost(_ name: String, on link: NetworkInterface? = nil) throws -> Endpoint {
+        if let link, let e = link.multicastLookup("\(name).local", port: Wire.defaultPort).first(where: link.isOnLink) {
+            return e
+        }
+        for n in ["\(name).local", name] {
+            let all = (try? Endpoint.resolveAll(n, defaultPort: Wire.defaultPort)) ?? []
+            let usable = link.map { l in all.filter(l.isOnLink) } ?? all
+            if let e = usable.first { return e }
+        }
+        throw StoreError(description: link.map { "\(name) has no address on \($0.displayName) (\($0.name))" } ?? "cannot resolve \(name)")
     }
 
     public var status: SessionStatus {
@@ -227,7 +259,7 @@ public final class Session: @unchecked Sendable {
                 // there proves (signed) that the receiver really is there.
                 if !isLive, candidate == nil, let host = config.pairing.hostName, t - lastResolve > 5 {
                     lastResolve = t
-                    if let ep = try? Session.resolveHost(host), ep != target, (try? socket.connect(ep)) != nil {
+                    if let ep = try? Session.resolveHost(host, on: link), ep != target, (try? socket.connect(ep)) != nil {
                         candidate = (ep, t + 3)
                     }
                 }
