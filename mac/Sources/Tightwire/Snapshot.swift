@@ -26,6 +26,10 @@ enum Snapshot {
     static let sizes: [(String, CGSize)] = [("min", MainWindow.minSize), ("large", CGSize(width: 1280, height: 860))]
 
     static func renderAll(to dir: String) {
+        // Background-only and never on screen: `swift run` starts a regular
+        // app, and a window shown per scenario would take focus each time
+        // (and make Stage Manager switch to it).
+        NSApp.setActivationPolicy(.prohibited)
         NSApp.appearance = NSAppearance(named: .darkAqua)
         let url = URL(fileURLWithPath: dir, isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
@@ -57,8 +61,8 @@ enum Snapshot {
         let host = NSHostingView(rootView: MainWindow(model: model))
         window.contentView = host
         window.setContentSize(size)
-        window.orderFrontRegardless()
         // Let SwiftUI lay out (split view columns settle over a few passes).
+        // The window is never ordered in; cacheDisplay draws it off screen.
         for _ in 0..<6 {
             RunLoop.main.run(until: Date().addingTimeInterval(0.1))
             window.layoutIfNeeded()
@@ -68,7 +72,6 @@ enum Snapshot {
         guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
         view.cacheDisplay(in: view.bounds, to: rep)
         try? rep.representation(using: .png, properties: [:])?.write(to: file)
-        window.orderOut(nil)
         window.close()
     }
 
@@ -329,6 +332,13 @@ enum Snapshot {
             m.phase = .unpaired
             m.setup = SetupStatus(microphone: .notDetermined, helperInstalled: false, helperRunning: false, helperBundled: true,
                                   launchAtLogin: .requiresApproval, paired: false)
+        },
+        Scenario(name: "8-direct-cable") { m in
+            paired(m)
+            m.pane = .receiver
+            m.interfaces = [NetworkInterface(name: "en0", displayName: "Ethernet",
+                                             subnets: [IPv4Subnet(address: 0xC633_6402, mask: 0xFFFF_FF00)])]
+            m.networkInterface = "en0"
         },
     ]
 }
